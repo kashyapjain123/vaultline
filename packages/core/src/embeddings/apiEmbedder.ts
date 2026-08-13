@@ -53,6 +53,23 @@ export class ApiEmbedder implements Embedder {
     this.headers = { "Content-Type": "application/json", ...buildAuthHeaders(options), ...(options.extraHeaders ?? {}) };
   }
 
+  /**
+   * Repoint this embedder at a different server, mid-session.
+   *
+   * Exists because the local server does not always land on the configured
+   * port — if something else holds it, EmbeddingServerManager picks the next
+   * free one (see selectPort there) and the embedder has to follow, or it keeps
+   * calling the port occupied by whatever displaced us.
+   *
+   * Mutating in place rather than rebuilding is the point: engine.ts hands this
+   * SAME instance to both EmbeddingRouter and SemanticKeywordMatcher, so one
+   * call repoints every consumer. A rebuild would leave the semantic matcher
+   * holding a stale embedder aimed at a dead port.
+   */
+  setBaseUrl(url: string): void {
+    this.baseUrl = url.replace(/\/$/, "");
+  }
+
   async embed(text: string): Promise<number[]> {
     const [vec] = await this.embedBatch([text]);
     return vec;

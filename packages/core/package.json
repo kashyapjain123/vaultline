@@ -1,6 +1,6 @@
 {
   "name": "@vaultline/core",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Editor-agnostic detection, redaction and policy engine for Vaultline — zero-trust context control for AI coding agents.",
   "author": {
     "name": "Kashyap Jain",
@@ -27,6 +27,7 @@
     "build:embeddings:all": "npm run compile && node scripts/buildEmbeddings.js --backend=hashing && node scripts/buildEmbeddings.js --backend=api",
     "test:matrix": "npm run compile && node test/scenario-matrix.js",
     "test:multiturn": "npm run compile && node test/multiturn-matrix.js",
+    "test:ports": "npm run compile && node test/port-conflict.js",
     "test:routing": "npm run compile && node test/routingMatrix.js",
     "test:hybrid": "npm run compile && node test/hybrid-matrix.js"
   },

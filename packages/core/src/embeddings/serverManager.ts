@@ -33,6 +33,7 @@
  */
 
 import * as fs from "fs";
+import * as net from "net";
 import * as path from "path";
 import * as crypto from "crypto";
 import { spawn, ChildProcess, execFile } from "child_process";
@@ -49,12 +50,35 @@ const HEALTH_POLL_INTERVAL_MS = 1000;
 /** Timeout for the one-shot probe that checks whether a server is ALREADY listening (started manually, or by another editor window). Short — this is a localhost round-trip, not a model call. */
 const PROBE_TIMEOUT_MS = 1500;
 
+/**
+ * How many ports past the configured one to consider before giving up.
+ *
+ * The configured port is a request, not a guarantee: 9000 is a popular default
+ * (Docker proxies, PHP-FPM, Portainer, assorted corporate agents) and a Windows
+ * user hit exactly that — the manager spawned onto an occupied port, the server
+ * died with EADDRINUSE, and MiniLM was permanently unavailable on that machine
+ * until they found the setting and changed it by hand.
+ *
+ * Ten is enough to walk past a cluster of neighbours without scanning a
+ * meaningful chunk of the port space when something is badly wrong.
+ */
+const PORT_SCAN_SPAN = 10;
+
+/** The one address the locally spawned server binds to — see embedding-server/server.js. */
+const LOOPBACK_IP = "127.0.0.1";
+
 export class EmbeddingServerManager {
   private child: ChildProcess | null = null;
   private output: LogChannel;
   private disposed = false;
   /** Guards against two ensureRunning() calls (e.g. activation + a settings change) racing into two spawns. */
   private starting: Promise<boolean> | null = null;
+  /**
+   * Where a LOCAL server actually ended up, which is not necessarily the
+   * configured port — see selectPort(). Null when there is no local server to
+   * talk to (remote endpoint, or nothing came up).
+   */
+  private resolvedBaseUrl: string | null = null;
 
   constructor(private host: VaultlineHost) {
     this.output = host.createLogChannel("Vaultline Embedding Server");
@@ -89,8 +113,23 @@ export class EmbeddingServerManager {
     this.output.show();
   }
 
+  /**
+   * Where the local server actually is, once ensureRunning() has resolved —
+   * e.g. "http://127.0.0.1:9002" when the configured 9000 was taken.
+   *
+   * Null means "nothing local to point at": either the user configured a remote
+   * endpoint (which the caller must leave alone) or no server came up at all.
+   * engine.ts uses this to repoint ApiEmbedder before promoting the backend;
+   * without it the embedder would keep calling the configured port, which is
+   * occupied by whatever displaced us.
+   */
+  effectiveBaseUrl(): string | null {
+    return this.resolvedBaseUrl;
+  }
+
   private async start(): Promise<boolean> {
     const settings = this.host.settings();
+    this.resolvedBaseUrl = null;
 
     if (settings.embeddingBackend !== "api") {
       this.log("Backend is not 'api' — nothing to start.");
@@ -101,26 +140,48 @@ export class EmbeddingServerManager {
 
     // A remote/hosted endpoint is somebody else's to run — never spawn
     // anything for it, but DO probe it, because whether it answers is
-    // exactly what the caller needs to know.
+    // exactly what the caller needs to know. resolvedBaseUrl stays null so the
+    // caller keeps using the configured URL untouched.
     if (!isLoopback(baseUrl)) {
       const remoteUp = await this.probeHealth(baseUrl);
       this.log(`${baseUrl} is not a local address — not starting anything. Reachable: ${remoteUp}.`);
       return remoteUp;
     }
 
-    // Someone may already be serving this port: a manually started server,
-    // or another editor window that got here first. Adopt it rather than
-    // fighting over the port. Probed BEFORE the auto-start setting is
-    // consulted, so that turning auto-start off to manage the server by
-    // hand still reports the truth about whether it's up.
-    if (await this.probeHealth(baseUrl)) {
-      this.log(`A server is already responding at ${baseUrl} — using it.`);
+    const preferredPort = portFromUrl(baseUrl);
+    const choice = await this.selectPort(preferredPort);
+
+    if (!choice) {
+      this.fail(
+        `Ports ${preferredPort}-${preferredPort + PORT_SCAN_SPAN} are all either in use by something else or ` +
+          "unavailable, so the embedding server has nowhere to listen. Falling back to the built-in hashing " +
+          "embedder. Set the embedding API URL to a free port to pin one explicitly."
+      );
+      return false;
+    }
+
+    const localUrl = `http://${LOOPBACK_IP}:${choice.port}`;
+
+    // Adopting an existing server — a manually started one, or another editor
+    // window that got here first. Checked BEFORE the auto-start setting, so
+    // that turning auto-start off to manage the server by hand still reports
+    // the truth about whether it's up.
+    if (choice.adopted) {
+      this.resolvedBaseUrl = localUrl;
+      this.log(`A server is already responding at ${localUrl} — using it.`);
       return true;
     }
 
     if (!settings.autoStartEmbeddingServer) {
-      this.log(`Auto-start is off and nothing is listening at ${baseUrl} — not starting one.`);
+      this.log(`Auto-start is off and no server is listening on ${preferredPort}-${preferredPort + PORT_SCAN_SPAN} — not starting one.`);
       return false;
+    }
+
+    if (choice.port !== preferredPort) {
+      this.log(
+        `Port ${preferredPort} is in use by another process — starting on ${choice.port} instead. ` +
+          "Set the embedding API URL if you'd rather pin a specific port."
+      );
     }
 
     const sourceDir = embeddingServerDir();
@@ -136,7 +197,7 @@ export class EmbeddingServerManager {
     if (fs.existsSync(path.join(sourceDir, "node_modules"))) {
       this.log("Dependencies are bundled with this build — skipping install, starting directly.");
       const bundledTools = await this.resolveTools();
-      return this.spawnServer(bundledTools.node ?? process.execPath, sourceDir, baseUrl);
+      return this.spawnServer(bundledTools.node ?? process.execPath, sourceDir, localUrl);
     }
 
     const installDir = path.join(this.host.storagePath(), "embedding-server");
@@ -165,7 +226,7 @@ export class EmbeddingServerManager {
       if (!installed) return false; // runNpmInstall already reported why
     }
 
-    return this.spawnServer(tools.node, installDir, baseUrl);
+    return this.spawnServer(tools.node, installDir, localUrl);
   }
 
   // ---------------------------------------------------------------------
@@ -293,7 +354,15 @@ export class EmbeddingServerManager {
     child.stderr?.on("data", (d) => this.log(String(d).trimEnd()));
     child.on("error", (err) => this.log(`Server process error: ${err}`));
     child.on("exit", (code, signal) => {
-      this.log(`Server exited (code=${code}, signal=${signal}).`);
+      // 48 is server.js's deliberate "the port was taken" exit — see its
+      // listen error handler. Naming it beats "exited with code 48", and it
+      // means something raced us onto the port between selectPort()'s
+      // bindability check and the spawn.
+      this.log(
+        code === 48
+          ? `Server exited: port ${port} was taken by another process before it could bind.`
+          : `Server exited (code=${code}, signal=${signal}).`
+      );
       if (this.child === child) this.child = null;
     });
 
@@ -303,6 +372,7 @@ export class EmbeddingServerManager {
     );
 
     if (ready) {
+      this.resolvedBaseUrl = baseUrl;
       this.log(`Embedding server ready at ${baseUrl}.`);
     } else if (!this.disposed) {
       this.fail(
@@ -325,12 +395,58 @@ export class EmbeddingServerManager {
     return false;
   }
 
-  /** True only when /health reports "ready". "loading" counts as not-yet — the model is still being read in, and embed calls would 503. */
+  /**
+   * Pick the port the local server should use.
+   *
+   * Walks the configured port and the PORT_SCAN_SPAN ports above it, taking the
+   * first that is either (a) already serving a healthy Vaultline server, which
+   * we adopt, or (b) free to bind. Returns null when the whole span is
+   * unusable.
+   *
+   * The two checks answer genuinely different questions and neither substitutes
+   * for the other. probeHealth() asks "is a VAULTLINE server here?" — a foreign
+   * process holding the port answers it with a 404 or a connection reset, which
+   * reads identically to "nothing is listening", which is precisely how the
+   * manager used to spawn onto an occupied port. isPortFree() asks "can I
+   * bind?", which is the question that was never being asked.
+   *
+   * Deliberately says nothing about the auto-start setting — start() decides
+   * whether to actually spawn onto a free port, so that a hand-managed server
+   * on a neighbouring port is still found and reported honestly either way.
+   */
+  private async selectPort(preferred: number): Promise<{ port: number; adopted: boolean } | null> {
+    let firstFree: number | null = null;
+
+    for (let port = preferred; port <= preferred + PORT_SCAN_SPAN; port++) {
+      if (await this.probeHealth(`http://${LOOPBACK_IP}:${port}`)) {
+        return { port, adopted: true };
+      }
+      if (firstFree === null && (await isPortFree(port))) {
+        // Keep scanning rather than returning immediately: a healthy server on
+        // a LATER port is a better answer than a free earlier one, since
+        // adopting it avoids a second model load. Only settle for the free
+        // port once the whole span has been checked for an adoptable server.
+        firstFree = port;
+      }
+    }
+
+    return firstFree === null ? null : { port: firstFree, adopted: false };
+  }
+
+  /**
+   * True only when /health reports "ready". "loading" counts as not-yet — the
+   * model is still being read in, and embed calls would 503.
+   *
+   * Probes by IP for loopback URLs (see toProbeUrl): the spawned server binds
+   * 127.0.0.1, and on Windows "localhost" commonly resolves to ::1 first, so
+   * probing by name would miss our own server and report it permanently
+   * unhealthy.
+   */
   private async probeHealth(baseUrl: string): Promise<boolean> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
     try {
-      const res = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+      const res = await fetch(`${toProbeUrl(baseUrl)}/health`, { signal: controller.signal });
       if (!res.ok) return false;
       const data = (await res.json()) as { status?: string };
       return data.status === "ready";
@@ -467,6 +583,49 @@ export class EmbeddingServerManager {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Can we bind this port on loopback?
+ *
+ * Exported for test/port-conflict.js, which occupies ports with plain net
+ * servers — testing port selection for real is otherwise impossible without
+ * spawning the actual model server.
+ *
+ * Binds to 127.0.0.1 specifically, matching where the real server listens. A
+ * foreign process holding 0.0.0.0:PORT or :::PORT still collides with that, so
+ * this doesn't under-report; binding the wildcard here instead WOULD
+ * over-report, by failing on ports that are only taken on some other interface.
+ */
+export function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once("error", () => resolve(false));
+    tester.once("listening", () => tester.close(() => resolve(true)));
+    tester.listen(port, LOOPBACK_IP);
+  });
+}
+
+/**
+ * Rewrite a loopback hostname to 127.0.0.1 for probing, leaving anything else
+ * alone.
+ *
+ * Necessary because the spawned server binds 127.0.0.1 rather than every
+ * interface, and on Windows "localhost" routinely resolves to ::1 first — so
+ * probing the configured "http://localhost:9000" would connect to nothing and
+ * report our own healthy server as down.
+ */
+function toProbeUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (url.hostname === "localhost" || url.hostname === "::1" || url.hostname === "0.0.0.0") {
+      url.hostname = LOOPBACK_IP;
+      return url.toString().replace(/\/$/, "");
+    }
+    return baseUrl;
+  } catch {
+    return baseUrl;
+  }
 }
 
 function isLoopback(baseUrl: string): boolean {

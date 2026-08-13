@@ -56,7 +56,11 @@ export interface InspectionReport {
 export class VaultlineEngine implements GuardContext {
   readonly auditLog: AuditLog;
 
-  private readonly apiEmbedder: Embedder;
+  // ApiEmbedder, not the Embedder interface: this one has to be repointable at
+  // run time (see repointApiEmbedder), since the local server doesn't always
+  // land on the configured port. The hashing embedder below stays an Embedder —
+  // it has no address to follow.
+  private readonly apiEmbedder: ApiEmbedder;
   private readonly hashingEmbedder: Embedder;
   private readonly router: EmbeddingRouter | null;
   private readonly semanticMatcher: SemanticKeywordMatcher | null;
@@ -241,8 +245,24 @@ export class VaultlineEngine implements GuardContext {
    */
   async restartEmbeddingServer(): Promise<boolean> {
     const ready = await this.serverManager.restart();
+    this.repointApiEmbedder();
     this.applyBackend(ready ? "api" : "hashing");
     return ready;
+  }
+
+  /**
+   * Follow the server to wherever it actually landed.
+   *
+   * The configured port is a request, not a guarantee — if something else holds
+   * it, the manager starts on the next free one. Without this the embedder
+   * would keep calling the configured port, i.e. whatever foreign process
+   * displaced us, and every embed call would fail (or worse, reach something
+   * unrelated). Null means there's nothing local to follow — a remote endpoint,
+   * which must keep using exactly the URL the user configured.
+   */
+  private repointApiEmbedder(): void {
+    const url = this.serverManager.effectiveBaseUrl();
+    if (url) this.apiEmbedder.setBaseUrl(url);
   }
 
   /**
@@ -271,7 +291,12 @@ export class VaultlineEngine implements GuardContext {
   /** Ask the server manager what's actually available, and match routing to the answer. */
   private syncBackendWithServer(): void {
     if (this.configuredBackend !== "api") return; // nothing to wait on; hashing is already live
-    void this.serverManager.ensureRunning().then((ready) => this.applyBackend(ready ? "api" : "hashing"));
+    void this.serverManager.ensureRunning().then((ready) => {
+      // Repoint BEFORE promoting the backend, so the first embed call after the
+      // swap already targets the port the server actually bound.
+      this.repointApiEmbedder();
+      this.applyBackend(ready ? "api" : "hashing");
+    });
   }
 
   /**
@@ -319,7 +344,7 @@ export class VaultlineEngine implements GuardContext {
   }
 }
 
-function buildApiEmbedder(settings: VaultlineSettings): Embedder {
+function buildApiEmbedder(settings: VaultlineSettings): ApiEmbedder {
   return new ApiEmbedder({
     baseUrl: settings.embeddingApiUrl,
     timeoutMs: settings.embeddingApiTimeoutMs,

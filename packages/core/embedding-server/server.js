@@ -97,6 +97,27 @@ app.post("/embed-batch", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Vaultline embedding server listening on http://localhost:${PORT}`);
+// LOOPBACK ONLY. `app.listen(PORT)` with no host binds to `::` — every
+// interface — which put an unauthenticated endpoint that exists to consume the
+// user's prompts on the LAN. (That wildcard bind is also what the ":::9000" in
+// an EADDRINUSE message refers to.) Anyone deliberately serving one machine
+// from another should set HOST explicitly and understand what they're exposing.
+const HOST = process.env.HOST || "127.0.0.1";
+
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Vaultline embedding server listening on http://${HOST}:${server.address().port}`);
+});
+
+// Without this, a bind failure is an UNCAUGHT EXCEPTION: the process dies
+// instantly with a stack trace, which is exactly what a Windows user saw when
+// something else already held port 9000. The manager treats a dead child as
+// "not ready" and falls back to the hashing embedder either way, but it can
+// only report the reason clearly if we exit deliberately.
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use — not starting. The extension will pick another port.`);
+    process.exit(48); // distinct from a generic failure, so the manager can name the cause
+  }
+  console.error("Server failed to start:", err);
+  process.exit(1);
 });

@@ -168,10 +168,12 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 
 ## Privacy
 
-Everything runs locally. The embedding server defaults to `http://localhost:9000`
-and is started and stopped by the extension itself. There is no telemetry and no
-account. The audit log is a local file that, by default, records *what type* of
-thing was redacted and never the value.
+Everything runs locally. The embedding server binds **loopback only**
+(`127.0.0.1`), starting at port 9000 and moving to the next free port if
+something else already holds it. It is started and stopped by the extension
+itself. There is no telemetry and no account. The audit log is a local file
+that, by default, records *what type* of thing was redacted and never the
+value.
 
 Pointing `embeddingApiUrl` at a remote endpoint is the one way to change that,
 and it is opt-in.
