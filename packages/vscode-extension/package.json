@@ -2,8 +2,9 @@
   "name": "vaultline",
   "displayName": "Vaultline",
   "description": "Zero-trust context control for AI coding agents.",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "publisher": "vaultline",
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
