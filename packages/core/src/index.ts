@@ -50,6 +50,13 @@ export {
 // --- Where the package keeps its own data, for hosts that must ship it ---
 export { categoryExamplesPath, centroidsPath, dataDir, embeddingServerDir, grammarDir, semanticSeedsPath } from "./assets";
 export { buildCentroids, type CentroidBuildResult } from "./centroidBuilder";
+export {
+  parseToolLimitFromError,
+  selectTools,
+  type ToolDescriptor,
+  type ToolSelectionOptions,
+  type ToolSelectionResult,
+} from "./toolSelection";
 
 // --- Detection pipeline ---
 export {

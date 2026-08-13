@@ -75,6 +75,10 @@ export interface VaultlineSettings {
   // --- Host capabilities the core only needs to report on ---
   /** Not read by the core — hosts that can expose a tool registry to the model check this themselves. Declared here so all settings live in one type. */
   enableToolCalling: boolean;
+  /** Ceiling on how many tools may be offered to the model in one request. See toolSelection.ts — exceeding the provider's limit fails the whole call. */
+  maxTools: number;
+  /** Tool-name patterns to never offer the model. `*` is a wildcard. */
+  toolDenyList: string[];
 }
 
 export const DEFAULT_SETTINGS: VaultlineSettings = {
@@ -130,6 +134,12 @@ export const DEFAULT_SETTINGS: VaultlineSettings = {
   auditLogIncludeValues: false,
 
   enableToolCalling: true,
+  // 128 is the limit Copilot enforces today, and the value that made
+  // @vaultline fail outright for a user whose extensions and MCP servers
+  // together exceeded it. Treated as a default rather than a constant because
+  // it is a provider detail — see parseToolLimitFromError in toolSelection.ts.
+  maxTools: 128,
+  toolDenyList: [],
 };
 
 /**

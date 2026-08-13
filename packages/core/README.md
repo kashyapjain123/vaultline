@@ -593,7 +593,10 @@ src/
   settings.ts                — VaultlineSettings, DEFAULT_SETTINGS, RULE_IDS
   assets.ts                  — resolves this package's own data/ and grammars
 
-  patternMatcher.ts          — structural regex: secrets
+  patternMatcher.ts          — structural regex: secrets. A rule whose pattern
+                               needs a key name to FIND the value (API_KEY = x)
+                               sets `valueGroup` + the `d` flag so only the
+                               value is redacted, leaving the name visible.
   piiDetector.ts             — structural regex + contextual proximity: PII
   infraDetector.ts           — structural regex + contextual proximity: infra
   nlpProximityMatcher.ts     — contextual proximity + fuzzy matching: conversational secrets

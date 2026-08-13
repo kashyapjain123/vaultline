@@ -226,6 +226,21 @@
           "default": "x-api-key",
           "description": "Header name to send the credential under when embeddingApiAuthType is 'apiKey'. Ignored for other auth types."
         },
+        "vaultline.maxTools": {
+          "type": "number",
+          "default": 128,
+          "minimum": 0,
+          "maximum": 128,
+          "description": "Most tools to offer the model in one request. Model providers cap this (Copilot rejects more than 128 with 'Cannot have more than 128 tools per request'), and VS Code's registry includes every built-in, extension and MCP tool you have installed — so a large setup can exceed it and fail every request. Tools are kept in VS Code's own order, which puts general-purpose built-ins first. Lower this if your provider's limit is smaller."
+        },
+        "vaultline.toolDenyList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Tool names never to offer the model, e.g. ['mcp_noisy_*']. '*' is a wildcard and matching is case-insensitive. Use this to spend your tool budget (see vaultline.maxTools) on the integrations you actually want rather than letting the cap decide."
+        },
         "vaultline.trustCustomEmbeddingsForBlocking": {
           "type": "boolean",
           "default": false,

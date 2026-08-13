@@ -29,6 +29,8 @@
     "test:multiturn": "npm run compile && node test/multiturn-matrix.js",
     "test:ports": "npm run compile && node test/port-conflict.js",
     "test:centroids": "npm run compile && node test/centroid-build.js",
+    "test:tools": "npm run compile && node test/tool-selection.js",
+    "test:spans": "npm run compile && node test/value-span.js",
     "test:routing": "npm run compile && node test/routingMatrix.js",
     "test:hybrid": "npm run compile && node test/hybrid-matrix.js"
   },

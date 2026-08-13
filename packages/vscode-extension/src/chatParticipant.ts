@@ -45,7 +45,15 @@
  * which re-redacts them against the same session store as the current turn.
  */
 
-import { ConversationTurn, GuardSession, TOKEN_PRESERVATION_INSTRUCTION, VaultlineEngine, VaultlineHost } from "@vaultline/core";
+import {
+  ConversationTurn,
+  GuardSession,
+  TOKEN_PRESERVATION_INSTRUCTION,
+  VaultlineEngine,
+  VaultlineHost,
+  parseToolLimitFromError,
+  selectTools,
+} from "@vaultline/core";
 import * as vscode from "vscode";
 
 const MAX_TOOL_ROUNDS = 8;
@@ -116,9 +124,34 @@ export function registerVaultlineParticipant(
     // --- Tool access: same registry agent mode uses ---
     // Read per request, not once at registration, so toggling the setting
     // takes effect on the next message rather than on the next reload.
-    const tools: vscode.LanguageModelChatTool[] = host.settings().enableToolCalling
-      ? vscode.lm.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))
-      : [];
+    //
+    // CAPPED, and that cap is load-bearing. `vscode.lm.tools` is every built-in,
+    // extension-contributed and MCP tool the user has installed, and providers
+    // refuse an over-long list outright — Copilot answers "Cannot have more than
+    // 128 tools per request" and the call dies before the model sees anything.
+    // Forwarding the registry blindly therefore broke @vaultline completely for
+    // users with a lot of extensions. See core/toolSelection.ts.
+    const settings = host.settings();
+    const selection = settings.enableToolCalling
+      ? selectTools(vscode.lm.tools, { max: settings.maxTools, denyList: settings.toolDenyList })
+      : { selected: [], denied: [], truncated: [] };
+
+    let tools: vscode.LanguageModelChatTool[] = selection.selected.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    }));
+
+    if (selection.truncated.length > 0) {
+      // Worth saying out loud: the user didn't ask for this, and it changes what
+      // the model can do for them. Silently dropping tools would look like the
+      // model simply choosing not to use one.
+      stream.markdown(
+        `ℹ️ *Vaultline offered the model ${tools.length} of ${tools.length + selection.truncated.length} available tools ` +
+          `(provider limit). ${selection.truncated.length} were left out — set \`vaultline.toolDenyList\` to choose which, ` +
+          `or raise \`vaultline.maxTools\` if your model allows more.*\n\n`
+      );
+    }
 
     const historyMessages = history.turns.map((turn) =>
       turn.role === "user"
@@ -172,7 +205,27 @@ export function registerVaultlineParticipant(
       let finalText = "";
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const chatResponse = await request.model.sendRequest(messages, { tools }, token);
+        let chatResponse: vscode.LanguageModelChatResponse;
+        try {
+          chatResponse = await request.model.sendRequest(messages, { tools }, token);
+        } catch (err) {
+          // The configured cap is a DEFAULT, not a contract — a different model
+          // may allow fewer tools than Copilot's 128. Rather than hardcoding a
+          // guess per provider, read the limit out of the rejection and retry
+          // against it once; if it isn't parseable, drop tools entirely so the
+          // developer still gets an answer instead of a raw error.
+          const limit = parseToolLimitFromError(String(err));
+          if (tools.length === 0 || !/tool/i.test(String(err))) throw err;
+
+          const retryMax = limit ?? 0;
+          const before = tools.length;
+          tools = tools.slice(0, retryMax);
+          stream.markdown(
+            `ℹ️ *The model rejected ${before} tools${limit ? ` (its limit is ${limit})` : ""} — retrying with ` +
+              `${tools.length}. Set \`vaultline.maxTools\` to ${retryMax} to avoid this round trip.*\n\n`
+          );
+          chatResponse = await request.model.sendRequest(messages, { tools }, token);
+        }
 
         const toolCalls: vscode.LanguageModelToolCallPart[] = [];
         let roundText = "";

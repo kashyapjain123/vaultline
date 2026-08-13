@@ -151,7 +151,7 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 
 ## Configuration
 
-35 settings under `vaultline.*`. The ones most worth knowing:
+38 settings under `vaultline.*`. The ones most worth knowing:
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -159,6 +159,7 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 | `enableCrossTurnSecretCarryover` / `crossTurnSecretTurns` | `true` / `2` | Keep detecting credentials for N turns after one is mentioned. Lower to `1` if unrelated value-shaped strings (commit hashes, build IDs) get redacted |
 | `blockOnHighSeverity` | `false` | Block instead of redact on a high-severity match. Off by default: inside a tool loop one false positive aborts the whole task, and redaction already keeps the value from leaving |
 | `enableToolCalling` | `true` | Whether `@vaultline` exposes `vscode.lm.tools` to the model |
+| `maxTools` / `toolDenyList` | `128` / `[]` | Cap on tools offered per request, and names to exclude. Providers reject an over-long list outright, and VS Code's registry counts every built-in, extension and MCP tool you have installed |
 | `enableSyntaxAwareRedaction` | `true` | Stop low-precision rules firing inside code comments |
 | `embeddingBackend` | `"api"` | `"api"` (local model server, auto-managed) or `"hashing"` (zero-setup, no server) |
 | `embeddingApiUrl` | local | Point at your own embedding service instead of the bundled one. Routing centroids are then **rebuilt against your model automatically**, once, and cached — see below |

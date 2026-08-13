@@ -31,6 +31,27 @@ export interface PatternRule {
   severity: Severity;
   category: Category;
   regex: RegExp;
+
+  /**
+   * Which capture group holds the sensitive VALUE, when the pattern has to
+   * match more than the value in order to find it.
+   *
+   * A rule like `API_KEY = <secret>` needs the key name in its pattern as an
+   * anchor, but the key name is NOT the secret — and redacting the whole match
+   * threw it away, so a `.env` file came back as a column of bare tokens with
+   * every variable name destroyed. Worse, the stored mapping then WAS the whole
+   * assignment, so rehydrating `<<API_KEY_1>>` in generated code produced
+   * `os.environ["API_KEY"] = "API_KEY = sk_live_..."`.
+   *
+   * Naming the group here keeps the anchor in the pattern and out of the
+   * redaction, which is what every other detector already does (see
+   * nlpProximityMatcher's note on not swallowing the keyword).
+   *
+   * REQUIRES the `d` flag on `regex` — that is what populates match indices.
+   * Omit this field entirely when the whole match genuinely is the secret, as
+   * for connection strings, where the host is as sensitive as the password.
+   */
+  valueGroup?: number;
 }
 
 export interface Match {
@@ -61,7 +82,8 @@ export const DEFAULT_RULES: PatternRule[] = [
     label: "AWS Secret Access Key (assignment)",
     severity: "high",
     category: "SECRET",
-    regex: /\b(?:aws_secret_access_key|secret_access_key)\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/gi,
+    regex: /\b(?:aws_secret_access_key|secret_access_key)\s*[:=]\s*['"]?([A-Za-z0-9/+=]{40})['"]?/gid,
+    valueGroup: 1,
   },
   {
     id: "private-key-block",
@@ -84,7 +106,8 @@ export const DEFAULT_RULES: PatternRule[] = [
     // / "token" are deliberately NOT here (they'd hit TypeScript annotations
     // like `token: string`), and are left to the proximity matcher.
     regex:
-      /["']?\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|access[_-]?key)\b["']?\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}['"]?/gi,
+      /["']?\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|access[_-]?key)\b["']?\s*[:=]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?/gid,
+    valueGroup: 1,
   },
   {
     id: "openai-api-key",
@@ -137,7 +160,8 @@ export const DEFAULT_RULES: PatternRule[] = [
     category: "SECRET",
     // `["']?` around the key name handles the quoted JSON form — see the
     // generic-api-key comment above for why that was a blind spot.
-    regex: /["']?\b(?:password|passwd|pwd)\b["']?\s*[:=]\s*['"]?[^\s'";,}]{6,}['"]?/gi,
+    regex: /["']?\b(?:password|passwd|pwd)\b["']?\s*[:=]\s*['"]?([^\s'";,}]{6,})['"]?/gid,
+    valueGroup: 1,
   },
   {
     id: "env-var-secret",
@@ -152,7 +176,8 @@ export const DEFAULT_RULES: PatternRule[] = [
     // PUBLIC_KEY are common and not secrets, so only the compound forms
     // (API_KEY, ACCESS_KEY, PRIVATE_KEY) count.
     regex:
-      /\b(?:export\s+)?[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|AUTH)[A-Z0-9_]*\s*=\s*["']?[^\s"']{8,}["']?/g,
+      /\b(?:export\s+)?[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|AUTH)[A-Z0-9_]*\s*=\s*["']?([^\s"']{8,})["']?/gd,
+    valueGroup: 1,
   },
   {
     id: "db-connection-string",
@@ -196,14 +221,23 @@ export function scan(text: string, rules: PatternRule[] = DEFAULT_RULES): Match[
     rule.regex.lastIndex = 0;
     let result: RegExpExecArray | null;
     while ((result = rule.regex.exec(text)) !== null) {
+      // Narrow to the rule's value group when it declares one. `indices` is
+      // only populated for a regex carrying the `d` flag, so a rule that
+      // declares valueGroup but forgets `d` — or whose optional group did not
+      // participate in this match — falls back to the whole match. That is the
+      // safe direction to fail: over-redacting loses context, under-redacting
+      // leaks the secret.
+      const span = rule.valueGroup !== undefined ? result.indices?.[rule.valueGroup] : undefined;
+      const value = span ? result[rule.valueGroup!] : result[0];
+
       matches.push({
         ruleId: rule.id,
         label: rule.label,
         severity: rule.severity,
         category: rule.category,
-        value: result[0],
-        start: result.index,
-        end: result.index + result[0].length,
+        value,
+        start: span ? span[0] : result.index,
+        end: span ? span[1] : result.index + result[0].length,
       });
       // Guard against zero-length matches causing infinite loops.
       if (result[0].length === 0) {
