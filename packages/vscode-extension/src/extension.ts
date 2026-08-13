@@ -149,7 +149,25 @@ export function activate(context: vscode.ExtensionContext) {
     );
   });
 
-  context.subscriptions.push(testPipelineCmd, showAuditLogCmd, restartServerCmd);
+  // Command: force a centroid rebuild against the configured endpoint.
+  //
+  // The automatic rebuild keys off embeddingApiUrl + embeddingApiModel, so it
+  // cannot notice the same URL quietly starting to serve a DIFFERENT model —
+  // nothing observable changes and the cached centroids stay in use, scoring
+  // against a vector space that no longer exists. This is the escape hatch.
+  const rebuildEmbeddingsCmd = vscode.commands.registerCommand("vaultline.rebuildCategoryEmbeddings", async () => {
+    engine.showEmbeddingServerLog();
+    const rebuilt = await engine.rebuildCategoryEmbeddings();
+    if (rebuilt) {
+      void vscode.window.showInformationMessage(
+        "Vaultline: category embeddings rebuilt against your endpoint — routing is using them now."
+      );
+    }
+    // The "nothing to rebuild" and failure cases already explain themselves,
+    // via engine.rebuildCategoryEmbeddings() and the server log respectively.
+  });
+
+  context.subscriptions.push(testPipelineCmd, showAuditLogCmd, restartServerCmd, rebuildEmbeddingsCmd);
 }
 
 export function deactivate() {}

@@ -63,15 +63,20 @@ const SERVER_DEPS = path.join("embedding-server", "node_modules");
  *    on purpose even though the run time doesn't read them either — vsce runs
  *    `vscode:prepublish`, i.e. tsc, while the staging is in place, and the
  *    extension type-checks against the core's emitted .d.ts;
- *  - categoryExamples.json: the INPUT to buildEmbeddings.js, not something
- *    the pipeline ever loads — only the centroids it precomputes are;
  *  - npm leftovers inside the bundled server tree (platform builds only):
  *    docs, tests and examples shipped by dependencies, some of them large.
+ *
+ * categoryExamples.json USED to be skipped here, on the grounds that it was
+ * only the input to buildEmbeddings.js and nothing at run time read it. That
+ * stopped being true: centroidBuilder.ts rebuilds the centroids in-process
+ * against whatever endpoint the user points vaultline.embeddingApiUrl at, and
+ * this 4.3KB corpus is its input. Without it shipping, a Marketplace install
+ * could never regenerate centroids at all — which left "same dimension,
+ * different model" silently scoring against a foreign vector space.
  */
 function shouldSkip(source) {
   const name = path.basename(source);
   if (name.endsWith(".map")) return true;
-  if (name === "categoryExamples.json") return true;
   if (source.includes(`${path.sep}node_modules${path.sep}`)) {
     // Markdown inside a dependency is documentation we have no reason to
     // ship — EXCEPT when it is the licence itself. sharp vendors its libvips

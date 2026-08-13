@@ -6,7 +6,7 @@
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
   },
-  "version": "1.2.6",
+  "version": "1.2.7",
   "publisher": "vaultline",
   "icon": "icon.png",
   "engines": {
@@ -41,6 +41,10 @@
       {
         "command": "vaultline.restartEmbeddingServer",
         "title": "Vaultline: Restart Embedding Server"
+      },
+      {
+        "command": "vaultline.rebuildCategoryEmbeddings",
+        "title": "Vaultline: Rebuild Category Embeddings"
       },
       {
         "command": "vaultline.anonymizeSelection",
@@ -221,6 +225,11 @@
           "type": "string",
           "default": "x-api-key",
           "description": "Header name to send the credential under when embeddingApiAuthType is 'apiKey'. Ignored for other auth types."
+        },
+        "vaultline.trustCustomEmbeddingsForBlocking": {
+          "type": "boolean",
+          "default": false,
+          "description": "When you point embeddingApiUrl at your own endpoint, Vaultline rebuilds its category centroids against that model automatically. Those rebuilt centroids still gate detection, but by default they are NOT trusted to block a whole message as confidential business content — an unvalidated model getting that wrong tells a developer their ordinary question is confidential. Turn this on once you've confirmed your model separates the categories cleanly."
         },
         "vaultline.auditLogIncludeValues": {
           "type": "boolean",

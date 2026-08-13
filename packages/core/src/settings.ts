@@ -55,6 +55,12 @@ export interface VaultlineSettings {
   embeddingApiAuthType: EmbeddingAuthType;
   embeddingApiAuthToken: string;
   embeddingApiKeyHeader: string;
+  /**
+   * Whether centroids rebuilt against a CUSTOM embedding endpoint may carry the
+   * whole-message business-content BLOCK. Off by default — see
+   * embeddingRouter.ts's wholeMessageCapable note for the measured reasoning.
+   */
+  trustCustomEmbeddingsForBlocking: boolean;
 
   // --- Per-rule opt-outs (see RULE_IDS) ---
   disabledSecretRules: string[];
@@ -109,6 +115,11 @@ export const DEFAULT_SETTINGS: VaultlineSettings = {
   embeddingApiAuthType: "none",
   embeddingApiAuthToken: "",
   embeddingApiKeyHeader: "x-api-key",
+  // Conservative by default, for the same measured reason the hashing fallback
+  // keeps routing but gives up the block: an uncalibrated embedder must not be
+  // the thing that decides an entire message is confidential. A user who has
+  // validated their own model can opt back in.
+  trustCustomEmbeddingsForBlocking: false,
 
   disabledSecretRules: [],
   disabledPiiRules: [],

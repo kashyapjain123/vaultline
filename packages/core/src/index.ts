@@ -48,7 +48,8 @@ export {
 } from "./settings";
 
 // --- Where the package keeps its own data, for hosts that must ship it ---
-export { centroidsPath, dataDir, embeddingServerDir, grammarDir, semanticSeedsPath } from "./assets";
+export { categoryExamplesPath, centroidsPath, dataDir, embeddingServerDir, grammarDir, semanticSeedsPath } from "./assets";
+export { buildCentroids, type CentroidBuildResult } from "./centroidBuilder";
 
 // --- Detection pipeline ---
 export {

@@ -44,6 +44,18 @@ export function semanticSeedsPath(): string {
   return path.join(dataDir(), "semanticKeywordSeeds.json");
 }
 
+/**
+ * The example corpus the centroids are averaged from.
+ *
+ * Ships as of 1.2.7 — it used to be build-input only, deliberately excluded
+ * from the packaged extension. centroidBuilder.ts now reads it at RUN time to
+ * rebuild centroids against a custom embedding endpoint, which is impossible
+ * without it (see the note in the host's scripts/stageCore.js).
+ */
+export function categoryExamplesPath(): string {
+  return path.join(dataDir(), "categoryExamples.json");
+}
+
 /** Source directory of the bundled MiniLM server — server.js plus its manifest, staged per-machine by EmbeddingServerManager. */
 export function embeddingServerDir(): string {
   return path.join(PACKAGE_ROOT, "embedding-server");

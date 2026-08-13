@@ -18,8 +18,12 @@
  *     // ... on shutdown: engine.dispose()
  */
 
+import * as crypto from "crypto";
+import * as fs from "fs";
+import * as path from "path";
 import { AuditLog, mappingsToDetail, matchesToDetail } from "./auditLog";
-import { centroidsPath, semanticSeedsPath } from "./assets";
+import { categoryExamplesPath, centroidsPath, semanticSeedsPath } from "./assets";
+import { buildCentroids } from "./centroidBuilder";
 import { ScanOptions, scanCurrentMessage } from "./detectionPipeline";
 import { ApiEmbedder } from "./embeddings/apiEmbedder";
 import { Embedder } from "./embeddings/embedder";
@@ -99,11 +103,14 @@ export class VaultlineEngine implements GuardContext {
     // similarities. That invariant is enforced structurally rather than by
     // convention: the centroids file is chosen BY backend here, and
     // EmbeddingRouter.useBackend() only ever swaps the two together.
-    const startingCentroids = centroidsPath(this.configuredBackend);
+    // centroidsPathFor, not centroidsPath: a previous session may already have
+    // rebuilt centroids for this endpoint, in which case we start on them
+    // rather than briefly scoring against the bundled MiniLM ones.
+    const startingCentroids = this.centroidsPathFor(this.configuredBackend);
     this.router = EmbeddingRouter.load(
       startingCentroids,
       this.configuredBackend === "api" ? this.apiEmbedder : this.hashingEmbedder,
-      this.configuredBackend === "api"
+      this.wholeMessageCapableFor(this.configuredBackend)
     );
     if (!this.router) {
       this.log.append(
@@ -250,6 +257,127 @@ export class VaultlineEngine implements GuardContext {
     return ready;
   }
 
+  // -------------------------------------------------------------------
+  // Custom embedding endpoints
+  // -------------------------------------------------------------------
+
+  /**
+   * Is the configured embedder producing vectors in a space the SHIPPED
+   * centroids don't describe?
+   *
+   * True for a non-loopback URL, or for any explicitly named model — both mean
+   * "something other than the bundled MiniLM server". The default setup answers
+   * false, which is what keeps this whole feature off the common path: no
+   * fingerprinting, no rebuild, no extra network call on an ordinary activation.
+   *
+   * A remote endpoint that happens to serve MiniLM too gets rebuilt
+   * unnecessarily. That costs one batch call, once, and is the right way to be
+   * wrong — the alternative is trusting a guess about somebody else's service.
+   */
+  private usesCustomEmbeddingSpace(): boolean {
+    const s = this.host.settings();
+    if (s.embeddingBackend !== "api") return false;
+    if (s.embeddingApiModel.trim().length > 0) return true;
+    try {
+      const host = new URL(s.embeddingApiUrl).hostname;
+      return !(host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0");
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Where a rebuilt centroid set for the CURRENT endpoint lives.
+   *
+   * The fingerprint is part of the FILENAME rather than a separate stamp file,
+   * so existence is the entire validity check — and flipping between two
+   * endpoints reuses each one's cached build instead of rebuilding every swap.
+   *
+   * What this deliberately cannot detect: the same URL quietly starting to
+   * serve a different model. Nothing observable changes, so the cache stays
+   * valid. That's what the "Rebuild Category Embeddings" command is for.
+   */
+  private customCentroidsPath(): string {
+    const s = this.host.settings();
+    const fp = crypto
+      .createHash("sha256")
+      .update(`${s.embeddingApiUrl} ${s.embeddingApiModel}`)
+      .digest("hex")
+      .slice(0, 16);
+    return path.join(this.host.storagePath(), "centroids", `categoryEmbeddings.${fp}.json`);
+  }
+
+  /** Which centroids the router should load for `backend`, preferring a rebuilt set when one applies. */
+  private centroidsPathFor(backend: EmbeddingBackend): string {
+    if (backend === "api" && this.usesCustomEmbeddingSpace()) {
+      const custom = this.customCentroidsPath();
+      if (fs.existsSync(custom)) return custom;
+    }
+    return centroidsPath(backend);
+  }
+
+  /**
+   * Rebuilt centroids gate detection but do NOT block whole messages, unless the
+   * user has explicitly said they trust their model. Same reasoning as the
+   * hashing fallback (see EmbeddingRouter's wholeMessageCapable note): a
+   * blocking decision made on similarity alone needs an embedder someone has
+   * actually measured, and an arbitrary endpoint is unmeasured by definition.
+   */
+  private wholeMessageCapableFor(backend: EmbeddingBackend): boolean {
+    if (backend !== "api") return false;
+    if (!this.usesCustomEmbeddingSpace()) return true;
+    return this.host.settings().trustCustomEmbeddingsForBlocking;
+  }
+
+  /**
+   * Build centroids for a custom endpoint if we don't have them cached.
+   * Never throws — a failure just leaves the bundled centroids in place, and
+   * scoreAll()'s dimension guard still catches the gross mismatch case.
+   */
+  private async ensureCustomCentroids(force = false): Promise<void> {
+    if (!this.usesCustomEmbeddingSpace()) return;
+
+    const target = this.customCentroidsPath();
+    if (force) await fs.promises.rm(target, { force: true }).catch(() => {});
+    else if (fs.existsSync(target)) return;
+
+    try {
+      const result = await this.host.withProgress(
+        { location: "notification", title: "Vaultline: rebuilding category embeddings for your endpoint" },
+        () => buildCentroids(categoryExamplesPath(), this.apiEmbedder, target)
+      );
+      this.log.append(
+        `Rebuilt ${result.categories} category centroids (${result.dim}-dim) against ` +
+          `${this.host.settings().embeddingApiUrl} -> ${target}`
+      );
+    } catch (err) {
+      this.log.append(
+        `Could not rebuild category embeddings against ${this.host.settings().embeddingApiUrl}: ${err}. ` +
+          "Keeping the bundled centroids — if your endpoint serves a different model, routing scores will be " +
+          "unreliable until this succeeds."
+      );
+    }
+  }
+
+  /**
+   * Force a rebuild against the current endpoint. Backs the "Rebuild Category
+   * Embeddings" command, which exists for the case the fingerprint can't see:
+   * the same URL now serving a different model.
+   */
+  async rebuildCategoryEmbeddings(): Promise<boolean> {
+    if (!this.usesCustomEmbeddingSpace()) {
+      void this.host.info(
+        "Vaultline is using the bundled embedding model, whose category embeddings ship with the extension — " +
+          "there is nothing to rebuild. This applies when vaultline.embeddingApiUrl points at your own endpoint."
+      );
+      return false;
+    }
+    await this.ensureCustomCentroids(true);
+    const built = fs.existsSync(this.customCentroidsPath());
+    if (built) this.applyBackend(this.activeBackend, true);
+    return built;
+  }
+
   /**
    * Follow the server to wherever it actually landed.
    *
@@ -291,10 +419,16 @@ export class VaultlineEngine implements GuardContext {
   /** Ask the server manager what's actually available, and match routing to the answer. */
   private syncBackendWithServer(): void {
     if (this.configuredBackend !== "api") return; // nothing to wait on; hashing is already live
-    void this.serverManager.ensureRunning().then((ready) => {
+    void this.serverManager.ensureRunning().then(async (ready) => {
       // Repoint BEFORE promoting the backend, so the first embed call after the
       // swap already targets the port the server actually bound.
       this.repointApiEmbedder();
+      // Then make sure the centroids describe THIS endpoint's vector space,
+      // also before the swap — applyBackend picks the file, so building after
+      // it would leave the router on the bundled centroids until something else
+      // happened to trigger another swap. No-ops entirely for the default
+      // bundled server.
+      if (ready) await this.ensureCustomCentroids();
       this.applyBackend(ready ? "api" : "hashing");
     });
   }
@@ -317,13 +451,17 @@ export class VaultlineEngine implements GuardContext {
    *     questions and real business content overlap under hashing, so no
    *     threshold separates them).
    */
-  private applyBackend(target: EmbeddingBackend): void {
-    if (!this.router || this.activeBackend === target) return;
+  private applyBackend(target: EmbeddingBackend, force = false): void {
+    // `force` exists for the rebuild command: the backend hasn't changed, but
+    // the FILE behind it has, so the early return would otherwise skip the
+    // reload and leave the router scoring against the centroids it built from
+    // the previous model.
+    if (!this.router || (this.activeBackend === target && !force)) return;
 
     const swapped = this.router.useBackend(
-      centroidsPath(target),
+      this.centroidsPathFor(target),
       target === "api" ? this.apiEmbedder : this.hashingEmbedder,
-      target === "api"
+      this.wholeMessageCapableFor(target)
     );
     if (!swapped) {
       this.log.append(

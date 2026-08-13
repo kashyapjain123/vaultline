@@ -106,6 +106,7 @@ rather than guessing.
 | **Test Detection Pipeline on Selection** | Runs the full pipeline over the selection without sending it anywhere, and without minting tokens a real conversation would have to resolve |
 | **Show Audit Log** | The local JSON-lines audit trail, tagged by source (`prompt` / `tool:<name>` / `history`) |
 | **Restart Embedding Server** | Recovers a wedged local model server, promoting routing back from the hashing fallback with no reload |
+| **Rebuild Category Embeddings** | Only for custom endpoints. Rebuilds routing centroids against your model — needed when the same URL starts serving a *different* model, which nothing can detect automatically |
 | **Anonymize Selection / Document** | Rewrite detected values in place |
 | **Restore Document** | Put the original values back from the saved mapping |
 
@@ -160,11 +161,45 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 | `enableToolCalling` | `true` | Whether `@vaultline` exposes `vscode.lm.tools` to the model |
 | `enableSyntaxAwareRedaction` | `true` | Stop low-precision rules firing inside code comments |
 | `embeddingBackend` | `"api"` | `"api"` (local model server, auto-managed) or `"hashing"` (zero-setup, no server) |
+| `embeddingApiUrl` | local | Point at your own embedding service instead of the bundled one. Routing centroids are then **rebuilt against your model automatically**, once, and cached — see below |
+| `trustCustomEmbeddingsForBlocking` | `false` | Whether rebuilt centroids may block a whole message as confidential business content. Off until you've validated your model |
 | `auditLogIncludeValues` | `false` | Off by default — turning it on makes the audit log itself a plaintext record of every secret caught |
 | `anonymizeMode` | `"placeholder"` | `placeholder` / `hash` (reversible) or `mask` (not) |
 | `disabled*Rules` | `[]` | Per-category checkbox lists for excluding individual rules |
 
 ---
+
+## Using your own embedding endpoint
+
+Set `embeddingApiUrl` (plus `embeddingApiAuthType` / `embeddingApiAuthToken` if
+it needs credentials). Your endpoint needs two routes:
+
+```
+POST {baseUrl}/embed-batch   { "texts": [...] }  ->  { "embeddings": [[...], ...] }
+GET  {baseUrl}/health                            ->  { "status": "ready" }
+```
+
+Routing works by comparing your message against precomputed **category
+centroids**, and those only mean anything if they came from the same model doing
+the comparing. So the first time Vaultline sees a new endpoint it rebuilds them
+against your model — 72 sentences, one batched call, cached per endpoint. Nothing
+happens for the default local setup.
+
+Two things worth knowing:
+
+- **Rebuilt centroids don't block by default.** They gate detection, but the
+  whole-message business-content *block* stays off until you set
+  `trustCustomEmbeddingsForBlocking`. An unvalidated model getting that wrong
+  tells a developer their ordinary question is confidential.
+- **Routing embeds your prompt before redaction.** It has to, in order to decide
+  which detectors to run. Self-hosted inside your network, that's fine; a
+  third-party embedding API would see unredacted text, which inverts the point of
+  the tool. Use `"embeddingBackend": "hashing"` to keep everything local instead —
+  you lose semantic keyword matching and business-content detection, and all
+  other detection is unaffected.
+
+`semanticMatchThreshold` (default `0.5`) was calibrated against MiniLM, so a
+different model may want a different value.
 
 ## Privacy
 
