@@ -241,6 +241,32 @@ matching and whole-message business-content detection. The platform builds
 trade one artifact for four in exchange for a zero-setup install — no npm, no
 network, no first-run wait. See `scripts/packagePlatforms.js`.
 
+**Seed the model cache before building platform packages**, or their whole
+reason for existing is silently lost:
+
+```bash
+cd packages/core/embedding-server && npm install && npm start   # ~23MB, then Ctrl+C
+```
+
+`packagePlatforms.js` bundles whatever is in
+`packages/core/embedding-server/node_modules/@xenova/transformers/.cache`. With
+an empty cache it prints `Model weights bundled: no` and carries on — the VSIXs
+still build, still install, and then download the model on first run like the
+portable build does. Check for `Model weights bundled: yes (offline install)` in
+the build output, and confirm afterwards:
+
+```bash
+unzip -l packages/vscode-extension/dist/vaultline-<v>-darwin-arm64.vsix | grep model_quantized
+```
+
+Publishing all five as one Marketplace listing (VS Code serves each machine its
+matching build and falls back to the portable one):
+
+```bash
+export VSCE_PAT=<token>   # Marketplace → Manage, All accessible organizations
+npx @vscode/vsce publish --packagePath packages/vscode-extension/dist/vaultline-<v>*.vsix
+```
+
 Both go through `scripts/stageCore.js` first. At rest `@vaultline/core` is a
 symlink created by its `file:../core` dependency, and its own dependencies
 live in `packages/core/node_modules` — meaning *nothing the extension needs
