@@ -189,6 +189,7 @@ All settings live under `vaultline.*` in VS Code settings:
 | Setting | Default | Purpose |
 |---|---|---|
 | `enablePiiDetection` / `enableInfraDetection` / `enableConversationalSecretDetection` / `enableBusinessContentDetection` | `true` | Toggle each detection layer wholesale |
+| `enableCrossTurnSecretCarryover` / `crossTurnSecretTurns` | `true` / `2` | Keep detecting credentials for N turns after one is mentioned, so a value supplied in a follow-up (`and password is` … `replace it with X`) is still caught. Without it the keyword and the value must appear in the same message. Lower the turn count to `1` if unrelated value-shaped strings (commit hashes, build IDs) get redacted after a credential comes up |
 | `enableHeuristicNameDetection` | `false` | Opt-in, high-false-positive-rate person-name heuristic |
 | `enableSemanticKeywordMatching` | `true` | Last-line-of-defense layer; only meaningful with `embeddingBackend: "api"` |
 | `enableToolCalling` | `true` | Whether `@vaultline` exposes `vscode.lm.tools` to the model at all |

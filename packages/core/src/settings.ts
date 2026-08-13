@@ -16,7 +16,7 @@
  * file by packages/vscode-extension/scripts/checkSettings.js.
  */
 
-import { DEFAULT_SEMANTIC_THRESHOLD } from "./detectionPipeline";
+import { DEFAULT_CROSS_TURN_TURNS, DEFAULT_SEMANTIC_THRESHOLD } from "./detectionPipeline";
 
 export type EmbeddingBackend = "hashing" | "api";
 export type EmbeddingAuthType = "none" | "bearer" | "apiKey" | "basic";
@@ -30,6 +30,10 @@ export interface VaultlineSettings {
   enablePiiDetection: boolean;
   enableInfraDetection: boolean;
   enableConversationalSecretDetection: boolean;
+  /** Carry a credential keyword's context into following turns — see core/conversationContext.ts. Has no effect when enableConversationalSecretDetection is off. */
+  enableCrossTurnSecretCarryover: boolean;
+  /** How many messages a credential keyword keeps cross-turn detection armed for. */
+  crossTurnSecretTurns: number;
   enableHeuristicNameDetection: boolean;
   enableBusinessContentDetection: boolean;
   enableSemanticKeywordMatching: boolean;
@@ -79,6 +83,11 @@ export const DEFAULT_SETTINGS: VaultlineSettings = {
   enablePiiDetection: true,
   enableInfraDetection: true,
   enableConversationalSecretDetection: true,
+  // On by default: a credential supplied one turn after the word that names it
+  // is ordinary conversation, not an edge case, and it used to go through
+  // unredacted. See core/conversationContext.ts.
+  enableCrossTurnSecretCarryover: true,
+  crossTurnSecretTurns: DEFAULT_CROSS_TURN_TURNS,
   enableHeuristicNameDetection: false, // experimental, high false-positive rate
   enableBusinessContentDetection: true,
   enableSemanticKeywordMatching: true,

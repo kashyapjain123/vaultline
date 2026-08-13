@@ -26,6 +26,7 @@
     "build:embeddings": "npm run compile && node scripts/buildEmbeddings.js",
     "build:embeddings:all": "npm run compile && node scripts/buildEmbeddings.js --backend=hashing && node scripts/buildEmbeddings.js --backend=api",
     "test:matrix": "npm run compile && node test/scenario-matrix.js",
+    "test:multiturn": "npm run compile && node test/multiturn-matrix.js",
     "test:routing": "npm run compile && node test/routingMatrix.js",
     "test:hybrid": "npm run compile && node test/hybrid-matrix.js"
   },

@@ -44,7 +44,8 @@
  */
 
 import { scan, DEFAULT_RULES, Match } from "./patternMatcher";
-import { scanProximity } from "./nlpProximityMatcher";
+import { KeywordSighting, scanCarriedOver, scanProximityWithContext } from "./nlpProximityMatcher";
+import { ConversationContext } from "./conversationContext";
 import { scanPiiStructural, scanPiiContextual, scanPersonNamesHeuristic, PiiScanOptions } from "./piiDetector";
 import { scanInfraStructural, scanInfraContextual } from "./infraDetector";
 import { scanBusinessContent } from "./businessContentDetector";
@@ -105,6 +106,20 @@ export interface ScanOptions {
    */
   syntaxAnalyzer?: SyntaxAnalyzer | null;
   codeLanguage?: string | null;
+
+  /**
+   * Cross-turn credential carry-over — see conversationContext.ts for the leak
+   * this closes. Only ever consulted by scanCurrentMessage(); scanAll() ignores
+   * it, because tool output and file paths aren't conversational turns and
+   * arming/decaying an expectation from them would be meaningless.
+   *
+   * Pass null/undefined (the default for any caller that doesn't hold a
+   * session) and the pipeline behaves exactly as it did before this existed.
+   */
+  conversationContext?: ConversationContext | null;
+  enableCrossTurnSecrets?: boolean; // default true
+  /** How many subsequent messages a credential keyword stays armed for. */
+  crossTurnSecretTurns?: number; // default 2
 }
 
 export interface ScanResult {
@@ -114,6 +129,8 @@ export interface ScanResult {
 
 const DEFAULT_MIN_SIMILARITY = 0.15;
 const DEFAULT_BUSINESS_THRESHOLD = 0.4;
+/** Messages a credential keyword keeps cross-turn detection armed for. Single source of truth for the setting's default — see settings.ts's module comment for why that matters. */
+export const DEFAULT_CROSS_TURN_TURNS = 2;
 // CALIBRATED (measured, not guessed) against all-MiniLM-L6-v2 — the
 // embedding-server/ model — by embedding every seed in
 // data/semanticKeywordSeeds.json against wanted synonyms and unwanted
@@ -193,14 +210,21 @@ function shiftMatch(match: Match, offset: number): Match {
   return offset === 0 ? match : { ...match, start: match.start + offset, end: match.end + offset };
 }
 
-/** Runs the routing-gated contextual detectors over `text` and offsets every resulting span by `offset` (0 when `text` already IS the full original text). */
+/**
+ * Runs the routing-gated contextual detectors over `text` and offsets every
+ * resulting span by `offset` (0 when `text` already IS the full original text).
+ *
+ * Also returns the credential keywords seen, which only scanCurrentMessage()
+ * uses (to arm cross-turn carry-over); scanAll() discards them.
+ */
 function runContextualDetectors(
   text: string,
   options: ScanOptions,
   decision: RoutingDecision,
   offset: number
-): Match[] {
+): { matches: Match[]; keywordsSeen: KeywordSighting[] } {
   const contextual: Match[] = [];
+  const keywordsSeen: KeywordSighting[] = [];
   if (options.enablePii !== false && decision.shouldRunPii) {
     contextual.push(...scanPiiContextual(text).map((m) => shiftMatch(m, offset)));
     if (options.pii?.enablePersonNameHeuristic) {
@@ -211,9 +235,11 @@ function runContextualDetectors(
     contextual.push(...scanInfraContextual(text).map((m) => shiftMatch(m, offset)));
   }
   if (options.enableConversationalSecrets !== false && decision.shouldRunConversationalSecrets) {
-    contextual.push(...scanProximity(text).map((m) => shiftMatch(m, offset)));
+    const proximity = scanProximityWithContext(text);
+    contextual.push(...proximity.matches.map((m) => shiftMatch(m, offset)));
+    keywordsSeen.push(...proximity.keywordsSeen);
   }
-  return contextual;
+  return { matches: contextual, keywordsSeen };
 }
 
 /**
@@ -365,7 +391,7 @@ export async function scanAll(text: string, options: ScanOptions = {}): Promise<
   const minSimilarity = options.routingMinSimilarity ?? DEFAULT_MIN_SIMILARITY;
 
   const decision = await computeRoutingDecision(text, router, alwaysAll, minSimilarity);
-  const contextual = runContextualDetectors(text, options, decision, 0);
+  const { matches: contextual } = runContextualDetectors(text, options, decision, 0);
   const businessMatches = await detectBusinessContent(text, options);
 
   return mergeAndFinalize(text, structural, contextual, businessMatches, options);
@@ -418,11 +444,42 @@ export async function scanCurrentMessage(text: string, options: ScanOptions = {}
   const alwaysAll = options.alwaysRunAllDetectors ?? false;
   const minSimilarity = options.routingMinSimilarity ?? DEFAULT_MIN_SIMILARITY;
 
+  // Read the expectation BEFORE this message can change it — otherwise a
+  // keyword in THIS message would arm carry-over for THIS message, duplicating
+  // what the proximity matcher already does in-message and flagging every
+  // value-shaped token in a perfectly ordinary "the password is X" line.
+  const conversation = options.conversationContext ?? null;
+  const carryOverEnabled = options.enableCrossTurnSecrets !== false && options.enableConversationalSecrets !== false;
+  const expectation = carryOverEnabled ? conversation?.peek() ?? null : null;
+
   const lines = splitNonBlankLines(text);
   const contextual: Match[] = [];
+  const keywordsSeen: KeywordSighting[] = [];
   for (const line of lines) {
     const decision = await computeRoutingDecision(line.text, router, alwaysAll, minSimilarity);
-    contextual.push(...runContextualDetectors(line.text, options, decision, line.start));
+    const result = runContextualDetectors(line.text, options, decision, line.start);
+    contextual.push(...result.matches);
+    keywordsSeen.push(...result.keywordsSeen);
+  }
+
+  // Whole-message, not per line: a follow-up value has no keyword to be near,
+  // so there is no line-level signal to preserve — and routing is irrelevant
+  // for a pass that consults no embeddings at all.
+  if (expectation) {
+    contextual.push(...scanCarriedOver(text, expectation));
+  }
+
+  // Arm or decay AFTER scanning. Re-arming on every keyword sighting keeps a
+  // sustained credential conversation armed throughout; the LAST sighting wins
+  // because it is the most recent context — in "...get bearer token / ... /
+  // and password is", the password is what the next turn is answering.
+  if (conversation && carryOverEnabled) {
+    const latest = keywordsSeen[keywordsSeen.length - 1];
+    if (latest) {
+      conversation.arm(latest.ruleId, latest.label, options.crossTurnSecretTurns ?? DEFAULT_CROSS_TURN_TURNS);
+    } else {
+      conversation.decayTurn();
+    }
   }
 
   const businessMatches = await detectBusinessContent(text, options);

@@ -223,9 +223,33 @@ function matchesKeywordAt(tokens: Token[], index: number, phrase: string[]): boo
   return true;
 }
 
+/** A credential keyword found in a message, whether or not a value was found alongside it. */
+export interface KeywordSighting {
+  ruleId: string;
+  label: string;
+}
+
+export interface ProximityScanResult {
+  matches: Match[];
+  /**
+   * Every keyword occurrence, in the order encountered — including ones with
+   * NO value in their window. That "keyword but no value" case is precisely
+   * the leak this feeds: "...and password is" ends a turn with nothing for
+   * this scan to match, and the value arrives in the next message. See
+   * conversationContext.ts.
+   */
+  keywordsSeen: KeywordSighting[];
+}
+
+/** Backwards-compatible entry point — the matches half of scanProximityWithContext(). */
 export function scanProximity(text: string): Match[] {
+  return scanProximityWithContext(text).matches;
+}
+
+export function scanProximityWithContext(text: string): ProximityScanResult {
   const tokens = tokenize(text);
   const matches: Match[] = [];
+  const keywordsSeen: KeywordSighting[] = [];
   // Tracks which token indices have already been consumed by a keyword
   // match, longest phrase first, so a single-word keyword like "token"
   // doesn't ALSO fire on top of an already-matched "access token".
@@ -245,6 +269,11 @@ export function scanProximity(text: string): Match[] {
       }
       if (alreadyClaimed) continue;
       for (let k = kwStartIdx; k <= kwEndIdx; k++) claimed.add(k);
+
+      // Recorded BEFORE the value search below, and regardless of whether it
+      // finds anything — a keyword with no value is exactly the signal that
+      // arms cross-turn detection.
+      keywordsSeen.push({ ruleId: "proximity-" + kw.phrase.join("-"), label: kw.label });
 
       // Search both directions within the window for a value-looking token.
       const searchStart = Math.max(0, kwStartIdx - WINDOW_SIZE);
@@ -279,5 +308,60 @@ export function scanProximity(text: string): Match[] {
     }
   }
 
-  return matches.sort((a, b) => a.start - b.start);
+  return { matches: matches.sort((a, b) => a.start - b.start), keywordsSeen };
+}
+
+/**
+ * Placeholders this project has already issued, e.g. "<<PASSWORD_1>>". The
+ * tokenizer below strips the angle brackets and hands back "PASSWORD_1", which
+ * sails through looksLikeSecretValue() (letters + digits, 10 chars) — so
+ * without this guard the carry-over pass would happily "redact" our own tokens
+ * back into fresh ones. Mirrors the shape findUnrestoredTokens() looks for.
+ */
+const ISSUED_PLACEHOLDER_RE = /<<\s*[A-Za-z][A-Za-z0-9_]*?_\d+\s*>>/g;
+
+/**
+ * Value-only pass for a message that has NO keyword of its own but follows one
+ * that did — see conversationContext.ts for when this is armed.
+ *
+ * The bar for "is this a value" is the same looksLikeSecretValue() every other
+ * detector uses, unchanged and deliberately strict (8+ chars, no whitespace,
+ * letters AND digits, or real base64 padding). That strictness is doing all the
+ * precision work here: with the keyword anchor gone, it is the only thing
+ * standing between this and redacting ordinary prose.
+ *
+ * Every value-shaped token is emitted, not just the first — a follow-up like
+ * "use admin1234 / hunter1x2y3z" is two secrets, not one. Overlap resolution in
+ * detectionPipeline.mergeAndFinalize() drops any span the in-message proximity
+ * matcher already claimed, so double-flagging is not possible.
+ */
+export function scanCarriedOver(text: string, expectation: { ruleId: string; label: string }): Match[] {
+  const skip: Array<[number, number]> = [];
+  for (const m of text.matchAll(ISSUED_PLACEHOLDER_RE)) {
+    if (m.index !== undefined) skip.push([m.index, m.index + m[0].length]);
+  }
+
+  const matches: Match[] = [];
+  for (const tok of tokenize(text)) {
+    if (skip.some(([s, e]) => tok.start < e && tok.end > s)) continue;
+    if (!looksLikeSecretValue(tok.text)) continue;
+
+    matches.push({
+      ruleId: expectation.ruleId,
+      // Relabelled so the chat banner explains ITSELF — a redaction with no
+      // visible keyword in the message looks arbitrary otherwise, and
+      // "why did it redact that?" is the fastest way to lose a user's trust
+      // in a security tool. The existing "(conversational)" qualifier is
+      // dropped rather than appended to, so the banner reads
+      // "Password (carried from previous turn)" and not the double-
+      // parenthesised "Password (conversational) (carried from previous turn)".
+      label: expectation.label.replace(/\s*\(conversational\)\s*$/, "") + " (carried from previous turn)",
+      severity: "medium" as Severity,
+      category: "SECRET",
+      value: stripValueQuotes(tok.text),
+      start: tok.start,
+      end: tok.end,
+    });
+  }
+  return matches;
 }

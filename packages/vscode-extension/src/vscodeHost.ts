@@ -25,8 +25,9 @@ export class VsCodeHost implements VaultlineHost {
    * Read every setting the core declares, in one pass keyed off
    * DEFAULT_SETTINGS.
    *
-   * Iterating the core's own key set — rather than writing 29 `config.get`
-   * calls with inline fallbacks — is what stops the two from drifting: a
+   * Iterating the core's own key set — rather than writing one `config.get`
+   * call per setting with inline fallbacks — is what stops the two from
+   * drifting: a
    * setting added to the core is read here automatically, and one missing
    * from package.json falls back to the core's default instead of
    * `undefined`. scripts/checkSettings.js turns the remaining gap (a setting

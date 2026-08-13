@@ -62,7 +62,14 @@ export {
 export { DEFAULT_RULES, SEVERITY_RANK, scan, type Category, type Match, type PatternRule, type Severity } from "./patternMatcher";
 export { scanPii, scanPiiContextual, scanPiiStructural, scanPersonNamesHeuristic, type PiiScanOptions } from "./piiDetector";
 export { scanInfra, scanInfraContextual, scanInfraStructural } from "./infraDetector";
-export { scanProximity } from "./nlpProximityMatcher";
+export {
+  scanCarriedOver,
+  scanProximity,
+  scanProximityWithContext,
+  type KeywordSighting,
+  type ProximityScanResult,
+} from "./nlpProximityMatcher";
+export { ConversationContext, type CredentialExpectation } from "./conversationContext";
 export { scanBusinessContent } from "./businessContentDetector";
 export { SemanticKeywordMatcher } from "./semanticKeywordMatcher";
 

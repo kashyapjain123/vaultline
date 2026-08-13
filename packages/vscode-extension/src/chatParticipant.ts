@@ -63,6 +63,33 @@ export function registerVaultlineParticipant(
   const session: GuardSession = engine.createSession(entityStorePersistPath);
 
   const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token) => {
+    // --- Conversation history, flattened to plain turns for the core ---
+    //
+    // ORDER MATTERS, and it used to be wrong: this ran AFTER guardPrompt.
+    // GuardSession.redactHistory() decides whether to bootstrap (full rescan
+    // of every prior turn) by checking whether the entity store is still
+    // empty — so running the live prompt first meant that any message
+    // containing a secret populated the store, redactHistory then took the
+    // cheap known-values path, and prior turns from before a window reload
+    // were replayed to the model with nothing redacted in them.
+    //
+    // Replaying history first also rebuilds the cross-turn credential
+    // expectation in turn order, so a reload in the middle of a credential
+    // exchange doesn't drop it (see core/conversationContext.ts).
+    const priorTurns: ConversationTurn[] = [];
+    for (const turn of chatContext.history) {
+      if (turn instanceof vscode.ChatRequestTurn) {
+        priorTurns.push({ role: "user", text: turn.prompt });
+      } else if (turn instanceof vscode.ChatResponseTurn) {
+        let responseText = "";
+        for (const part of turn.response) {
+          if (part instanceof vscode.ChatResponseMarkdownPart) responseText += part.value.value;
+        }
+        priorTurns.push({ role: "assistant", text: responseText });
+      }
+    }
+    const history = await session.redactHistory(priorTurns);
+
     // --- Detection on the developer's prompt ---
     const guarded = await session.guardPrompt(request.prompt);
 
@@ -93,20 +120,6 @@ export function registerVaultlineParticipant(
       ? vscode.lm.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))
       : [];
 
-    // --- Conversation history, flattened to plain turns for the core ---
-    const priorTurns: ConversationTurn[] = [];
-    for (const turn of chatContext.history) {
-      if (turn instanceof vscode.ChatRequestTurn) {
-        priorTurns.push({ role: "user", text: turn.prompt });
-      } else if (turn instanceof vscode.ChatResponseTurn) {
-        let responseText = "";
-        for (const part of turn.response) {
-          if (part instanceof vscode.ChatResponseMarkdownPart) responseText += part.value.value;
-        }
-        priorTurns.push({ role: "assistant", text: responseText });
-      }
-    }
-    const history = await session.redactHistory(priorTurns);
     const historyMessages = history.turns.map((turn) =>
       turn.role === "user"
         ? vscode.LanguageModelChatMessage.User(turn.text)

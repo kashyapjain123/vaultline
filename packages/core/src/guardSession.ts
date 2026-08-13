@@ -29,6 +29,7 @@
  */
 
 import { AuditLog, mappingsToDetail, matchesToDetail } from "./auditLog";
+import { ConversationContext } from "./conversationContext";
 import { ScanOptions, scanAll, scanCurrentMessage } from "./detectionPipeline";
 import { EntityStore } from "./entityStore";
 import { Match } from "./patternMatcher";
@@ -90,6 +91,14 @@ export interface RestoreGuardResult {
 
 export class GuardSession {
   private readonly store: EntityStore;
+  /**
+   * Deliberately NOT persisted alongside the EntityStore, unlike the mapping
+   * table. A mapping is a fact that stays true forever ("this value is
+   * <<PASSWORD_1>>"); an expectation is a guess about the next two messages,
+   * and reviving a stale one after a window reload would flag the first
+   * value-shaped string of a brand new conversation.
+   */
+  private readonly conversation = new ConversationContext();
 
   /** `persistPath`, when given, mirrors every mapping minted this session to a JSON file — one file per session, so the mapping table survives inspection after the fact. */
   constructor(private readonly context: GuardContext, persistPath?: string) {
@@ -99,6 +108,26 @@ export class GuardSession {
   /** The session's mapping table. Exposed for hosts that want to show or export it; callers should not mutate it. */
   entityStore(): EntityStore {
     return this.store;
+  }
+
+  /** The session's cross-turn credential expectation. Exposed for hosts that want to reset it when a conversation ends. */
+  conversationContext(): ConversationContext {
+    return this.conversation;
+  }
+
+  /**
+   * Config-derived scan options plus this session's conversation state.
+   *
+   * The split is on purpose: `context.scanOptions()` stays pure configuration,
+   * re-read per message and identical for every session, while the mutable
+   * per-conversation piece is attached here by the one object that owns it.
+   * Only the two entry points that scan a real conversational TURN use this —
+   * tool output and file paths go through plain scanOptions(), since arming a
+   * "a credential is inbound" expectation from a file listing would be
+   * meaningless.
+   */
+  private liveScanOptions(): ScanOptions {
+    return { ...this.context.scanOptions(), conversationContext: this.conversation };
   }
 
   // -------------------------------------------------------------------
@@ -116,7 +145,7 @@ export class GuardSession {
    */
   async guardPrompt(text: string, source = "prompt"): Promise<PromptGuardResult> {
     const includeValues = this.context.auditIncludesValues();
-    const { matches, businessMatches } = await scanCurrentMessage(text, this.context.scanOptions());
+    const { matches, businessMatches } = await scanCurrentMessage(text, this.liveScanOptions());
     const decision = decide(matches, businessMatches, this.context.policyConfig());
 
     if (decision.action === "block") {
@@ -172,7 +201,11 @@ export class GuardSession {
    */
   async redactHistory(turns: ConversationTurn[]): Promise<HistoryGuardResult> {
     const bootstrapping = this.store.size() === 0 && turns.length > 0;
-    const scanOptions = this.context.scanOptions();
+    // liveScanOptions, so replaying history on a cold store also rebuilds the
+    // cross-turn credential expectation in turn order — otherwise a window
+    // reload in the middle of a credential exchange would drop the
+    // expectation and leak the value the very next message supplies.
+    const scanOptions = this.liveScanOptions();
 
     const out: ConversationTurn[] = [];
     const allMappings: TokenMapping[] = [];

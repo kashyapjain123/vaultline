@@ -152,6 +152,11 @@ export class VaultlineEngine implements GuardContext {
       enablePii: settings.enablePiiDetection,
       enableInfra: settings.enableInfraDetection,
       enableConversationalSecrets: settings.enableConversationalSecretDetection,
+      // NOTE: no conversationContext here on purpose — that is per-SESSION
+      // state, attached by GuardSession.liveScanOptions(). These two are the
+      // config half of the same feature.
+      enableCrossTurnSecrets: settings.enableCrossTurnSecretCarryover,
+      crossTurnSecretTurns: settings.crossTurnSecretTurns,
       enableBusinessContentDetection: settings.enableBusinessContentDetection,
       pii: { enablePersonNameHeuristic: settings.enableHeuristicNameDetection },
       router: this.router,

@@ -95,6 +95,18 @@
           "default": true,
           "description": "Detect secrets phrased conversationally (e.g. 'my password is X') rather than as code-style assignments (e.g. 'password=X')."
         },
+        "vaultline.enableCrossTurnSecretCarryover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep detecting credentials for a few turns after one is mentioned, so a value supplied in a follow-up message ('and password is' … 'replace it with X') is still redacted. Requires conversational secret detection."
+        },
+        "vaultline.crossTurnSecretTurns": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "How many messages a credential keyword keeps cross-turn detection armed for. Lower this to 1 if unrelated value-shaped strings (commit hashes, build IDs) are being redacted after a credential is discussed."
+        },
         "vaultline.enableHeuristicNameDetection": {
           "type": "boolean",
           "default": false,
