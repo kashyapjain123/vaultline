@@ -1,0 +1,41 @@
+{
+  "name": "@vaultline/core",
+  "version": "1.1.2",
+  "description": "Editor-agnostic detection, redaction and policy engine for Vaultline — zero-trust context control for AI coding agents.",
+  "license": "Apache-2.0",
+  "main": "./out/index.js",
+  "types": "./out/index.d.ts",
+  "files": [
+    "out",
+    "data",
+    "embedding-server/server.js",
+    "embedding-server/package.json",
+    "embedding-server/package-lock.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build:embeddings": "npm run compile && node scripts/buildEmbeddings.js",
+    "build:embeddings:all": "npm run compile && node scripts/buildEmbeddings.js --backend=hashing && node scripts/buildEmbeddings.js --backend=api",
+    "test:matrix": "npm run compile && node test/scenario-matrix.js",
+    "test:routing": "npm run compile && node test/routingMatrix.js",
+    "test:hybrid": "npm run compile && node test/hybrid-matrix.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.22.6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kashyapjain123/vaultline.git",
+    "directory": "packages/core"
+  }
+}

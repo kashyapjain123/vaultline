@@ -1,0 +1,27 @@
+eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.20.30.40  netmask 255.255.255.0  broadcast 10.20.30.255
+        inet6 fe80::dead:beef:cafe:0001  prefixlen 64  scopeid 0x20<link>
+        ether 02:00:5e:10:00:01  txqueuelen 1000  (Ethernet)
+        RX packets 104523  bytes 125436122 (125.4 MB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 84321  bytes 9432104 (9.4 MB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 65536
+        inet 127.0.0.1  netmask 255.0.0.0
+        inet6 ::1  prefixlen 128  scopeid 0x10<host>
+        loop  txqueuelen 1000  (Local Loopback)
+
+customer id 4521, my tokn is "hunter2isnotsecure", and the server is app-node-02
+customer id 4540, my pwrd is "hunter1isnotsecure", and the node is app-node-01
+
+my node version is v24.13.0
+https://svc-01.corp.example.internal/api/getToken
+
+write a node js client to generate auth token using above credentials
+
+--- structural rules, for comparison ---
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+contact alex.doe@example.com about the rollout
+DATABASE_URL=postgresql://appuser:s3cr3tpassw0rd@db.example.internal:5432/appdb
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk

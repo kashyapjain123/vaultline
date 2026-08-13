@@ -1,0 +1,84 @@
+{
+  "credential": {
+    "label": "Password / Credential (semantic match)",
+    "category": "SECRET",
+    "severity": "medium",
+    "seeds": [
+      "password",
+      "passphrase",
+      "credential",
+      "login secret",
+      "account secret",
+      "passcode",
+      "master password",
+      "vault password",
+      "login password",
+      "one time password",
+      "otp"
+    ]
+  },
+  "api-key": {
+    "label": "API Key / Token (semantic match)",
+    "category": "SECRET",
+    "severity": "medium",
+    "seeds": [
+      "api key",
+      "access token",
+      "auth token",
+      "bearer token",
+      "client secret",
+      "private key",
+      "api token",
+      "service account key",
+      "subscription key",
+      "signing key",
+      "webhook secret"
+    ]
+  },
+  "pii-identifier": {
+    "label": "Personal Identifier (semantic match)",
+    "category": "PII",
+    "severity": "medium",
+    "seeds": [
+      "phone number",
+      "account number",
+      "national id",
+      "social security number",
+      "date of birth",
+      "aadhaar number",
+      "pan card number",
+      "passport number",
+      "driver license number",
+      "tax identification number",
+      "dob"
+    ]
+  },
+  "financial-identifier": {
+    "label": "Financial Identifier (semantic match)",
+    "category": "PII",
+    "severity": "medium",
+    "seeds": [
+      "bank account number",
+      "ifsc code",
+      "credit card number",
+      "routing number",
+      "iban",
+      "upi id"
+    ]
+  },
+  "infrastructure": {
+    "label": "Infrastructure Detail (semantic match)",
+    "category": "INFRA",
+    "severity": "low",
+    "seeds": [
+      "server hostname",
+      "internal ip address",
+      "database connection",
+      "port number",
+      "database hostname",
+      "network address",
+      "cluster node name",
+      "service endpoint"
+    ]
+  }
+}

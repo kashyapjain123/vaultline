@@ -1,0 +1,370 @@
+{
+  "name": "vaultline",
+  "displayName": "Vaultline",
+  "description": "Zero-trust context control for AI coding agents.",
+  "version": "1.1.2",
+  "publisher": "vaultline",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "vaultline.guard",
+        "fullName": "Vaultline",
+        "name": "vaultline",
+        "description": "Ask me anything — I screen the prompt and response for secrets before they leave your machine.",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "vaultline.testPipeline",
+        "title": "Vaultline: Test Detection Pipeline on Selection"
+      },
+      {
+        "command": "vaultline.showAuditLog",
+        "title": "Vaultline: Show Audit Log"
+      },
+      {
+        "command": "vaultline.restartEmbeddingServer",
+        "title": "Vaultline: Restart Embedding Server"
+      },
+      {
+        "command": "vaultline.anonymizeSelection",
+        "title": "Vaultline: Anonymize Selection"
+      },
+      {
+        "command": "vaultline.anonymizeDocument",
+        "title": "Vaultline: Anonymize Document"
+      },
+      {
+        "command": "vaultline.restoreDocument",
+        "title": "Vaultline: Restore Document"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vaultline.anonymizeSelection",
+          "group": "9_vaultline@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "vaultline.anonymizeDocument",
+          "group": "9_vaultline@2"
+        },
+        {
+          "command": "vaultline.restoreDocument",
+          "group": "9_vaultline@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Vaultline",
+      "properties": {
+        "vaultline.blockOnHighSeverity": {
+          "type": "boolean",
+          "default": false,
+          "description": "Block outbound requests entirely when a high-severity match is found (e.g. private keys, PAN, SSN), instead of redacting."
+        },
+        "vaultline.enablePiiDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect personal/financial identifiers (email, PAN, IFSC, SSN, Aadhaar, credit card numbers, contextual phone/account/customer IDs)."
+        },
+        "vaultline.enableInfraDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect internal infrastructure details (IP addresses, internal URLs, file paths, internal hostnames, port numbers)."
+        },
+        "vaultline.enableConversationalSecretDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect secrets phrased conversationally (e.g. 'my password is X') rather than as code-style assignments (e.g. 'password=X')."
+        },
+        "vaultline.enableHeuristicNameDetection": {
+          "type": "boolean",
+          "default": false,
+          "description": "EXPERIMENTAL, off by default: flag consecutive Capitalized-Word pairs as possible person names. No real NER model backs this — it has a high false-positive rate (product names, places, titles) and is a rough stand-in until a real named-entity-recognition model is integrated."
+        },
+        "vaultline.enableBusinessContentDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use embedding-similarity routing to flag whole messages that look like confidential business content (budgets, strategy, M&A) with no fixed format or keyword to anchor a regex on. Requires the precomputed category embeddings (npm run build:embeddings) — silently does nothing if that file is missing."
+        },
+        "vaultline.blockOnBusinessContent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Block (rather than just report) when business-content detection fires. There's no sensible 'redact' for a whole-message concern, so this is block-or-nothing."
+        },
+        "vaultline.routingMinSimilarity": {
+          "type": "number",
+          "default": 0.15,
+          "description": "Minimum embedding similarity score for a category's CONTEXTUAL detector to run at all. Deliberately low/generous — false positives here just mean running one extra cheap, safe check."
+        },
+        "vaultline.businessContentThreshold": {
+          "type": "number",
+          "default": 0.4,
+          "description": "Minimum embedding similarity score for the business-content whole-message flag to fire. Deliberately much stricter than routingMinSimilarity, since a false positive here means wrongly blocking an entire ordinary message."
+        },
+        "vaultline.alwaysRunAllDetectors": {
+          "type": "boolean",
+          "default": false,
+          "description": "Bypass embedding routing entirely and run every contextual detector on every message regardless of similarity score. Useful for debugging routing itself, or as a safety fallback if you don't trust the routing thresholds yet."
+        },
+        "vaultline.embeddingBackend": {
+          "type": "string",
+          "enum": [
+            "hashing",
+            "api"
+          ],
+          "default": "api",
+          "description": "Which Embedder computes routing vectors. 'api' (default) calls a local backend server running all-MiniLM-L6-v2 — the extension starts and manages it for you (see vaultline.autoStartEmbeddingServer), installing its dependencies on first run. 'hashing' is the built-in, zero-setup, dependency-free lexical embedder: no server and no model download, but lexical rather than semantic similarity, and it disables semantic keyword matching entirely. IMPORTANT: the bundled categoryEmbeddings.json is precomputed with the 'api' backend (384-dim), so switching to 'hashing' requires regenerating it with the matching backend (npm run build:embeddings -- --backend=hashing), or routing will fail (safely — it fails open) on a vector-space mismatch."
+        },
+        "vaultline.highlightDetectedPii": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight detected sensitive values in the editor, with marks in the scrollbar and a hover showing what was detected. This runs every offline detector — structural rules (API keys, PEM blocks, JWTs, connection strings, emails, card numbers, IPs) AND contextual ones (customer ids, internal hostnames, 'my password is …'). The only layers it leaves out are the two needing an embedding call: whole-message business-content classification, which has no span to highlight, and semantic keyword matching. Both still run in full on anything actually sent to a model, so highlighting is an affordance rather than the enforcement point."
+        },
+        "vaultline.inlineWarnings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a ghost-text hint at the end of the line the cursor is on when that line contains detected values. One hint on the current line only, rather than one per flagged line — files full of credentials (a .env, a fixture) are exactly where this fires most, and a hint on every line would be unreadable. Requires vaultline.highlightDetectedPii."
+        },
+        "vaultline.anonymizeMode": {
+          "type": "string",
+          "enum": [
+            "placeholder",
+            "mask",
+            "hash"
+          ],
+          "default": "placeholder",
+          "enumDescriptions": [
+            "<<EMAIL_1>> — typed and numbered. Reversible with 'Vaultline: Restore Document'.",
+            "*** — every value becomes identical. NOT reversible; no mapping is saved.",
+            "[EMAIL_a1b2c3d4] — stable digest per value. Reversible, and the same value always produces the same token."
+          ],
+          "description": "How 'Vaultline: Anonymize Selection/Document' replaces a detected value. 'placeholder' and 'hash' save a per-document mapping and can be undone; 'mask' deliberately saves nothing, so it cannot be undone — it asks for confirmation first."
+        },
+        "vaultline.highlightMaxFileLength": {
+          "type": "number",
+          "default": 100000,
+          "description": "Skip live highlighting in documents longer than this many characters. Above the cap, re-scanning on every edit costs more than the feature is worth; the explicit anonymize commands still work on files of any size."
+        },
+        "vaultline.autoStartEmbeddingServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start (and stop with the window) the local MiniLM embedding server, when vaultline.embeddingBackend is 'api' and vaultline.embeddingApiUrl points at localhost. The first run installs the server's dependencies into the extension's storage directory (~1-3 min, needs network) and downloads the ~90MB model — both one-time. If a server is already responding on that URL — started by hand, or by another VS Code window — that one is adopted instead of starting a second. Turn this off to manage the server yourself (cd packages/core/embedding-server && npm install && npm start). Requires npm on PATH for that one-time install (running the server afterwards does not — it falls back to VS Code's bundled Node runtime). Without a reachable server everything fails open rather than erroring: all pattern, PII, infrastructure and conversational rules keep firing, and routing degrades to running every contextual detector unconditionally — but the two embedding-only layers, business-content detection and semantic keyword matching, go silently inactive."
+        },
+        "vaultline.embeddingServerNodePath": {
+          "type": "string",
+          "default": "",
+          "description": "Full path to the Node.js binary used to run the embedding server. Leave blank to auto-detect (asks your login shell, then checks the usual install locations, then falls back to VS Code's own bundled Node runtime). Set this if auto-detection picks the wrong version — e.g. with nvm/fnm/asdf, where the right node isn't on the PATH VS Code inherited."
+        },
+        "vaultline.embeddingApiUrl": {
+          "type": "string",
+          "default": "http://localhost:9000",
+          "description": "Base URL of the embedding backend server, used only when vaultline.embeddingBackend is 'api'. Defaults to the bundled MiniLM server's port (9000). Point this at any OpenAI-compatible or custom embedding API instead by changing this and the auth settings below."
+        },
+        "vaultline.embeddingApiTimeoutMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "How long to wait for the embedding API before giving up on routing for that message (fails open — every contextual detector just runs instead)."
+        },
+        "vaultline.embeddingApiModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model name, sent as an extra 'model' field in each request — for APIs that serve more than one embedding model behind the same URL (e.g. hosted providers). Leave blank for the bundled server, which ignores this field."
+        },
+        "vaultline.embeddingApiAuthType": {
+          "type": "string",
+          "enum": [
+            "none",
+            "bearer",
+            "apiKey",
+            "basic"
+          ],
+          "default": "none",
+          "description": "Authentication scheme for a custom embedding API. 'none' for the bundled local server (default). 'bearer' sends 'Authorization: Bearer <token>'. 'apiKey' sends the token under embeddingApiKeyHeader. 'basic' expects embeddingApiAuthToken as 'username:password' and base64-encodes it into a standard Basic auth header."
+        },
+        "vaultline.embeddingApiAuthToken": {
+          "type": "string",
+          "default": "",
+          "description": "Credential for the embedding API — a bearer token, an API key, or 'username:password' for basic auth, depending on embeddingApiAuthType. SECURITY NOTE: this is stored in plain text in settings.json (and syncs via Settings Sync if enabled), same as every other setting here — this is not a production one. For anything beyond local testing, move this to VS Code's SecretStorage API (context.secrets) instead, which vscodeHost.ts does not currently use."
+        },
+        "vaultline.embeddingApiKeyHeader": {
+          "type": "string",
+          "default": "x-api-key",
+          "description": "Header name to send the credential under when embeddingApiAuthType is 'apiKey'. Ignored for other auth types."
+        },
+        "vaultline.auditLogIncludeValues": {
+          "type": "boolean",
+          "default": false,
+          "description": "DEFAULT OFF ON PURPOSE. When enabled, the audit log additionally records the real sensitive value and the placeholder token assigned to it for every redaction — turning the audit log itself into a plaintext record of the secrets it caught. Useful for debugging detection accuracy against real data; genuinely dangerous to leave on if the log file (see 'Vaultline: Show Audit Log' for its path) isn't itself access-controlled and excluded from backups/sync."
+        },
+        "vaultline.disabledSecretRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "aws-access-key",
+              "aws-secret-key",
+              "private-key-block",
+              "generic-api-key",
+              "openai-api-key",
+              "stripe-api-key",
+              "jwt",
+              "slack-token",
+              "github-token",
+              "generic-password-assignment",
+              "env-var-secret",
+              "db-connection-string",
+              "sqlserver-connection-string"
+            ]
+          },
+          "default": [],
+          "description": "Structural secret rules (@vaultline/core patternMatcher) to turn OFF. Check a box in the Settings UI to disable that specific rule; leave unchecked to keep it active. Empty = everything enabled."
+        },
+        "vaultline.disabledPiiRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "email",
+              "pan-india",
+              "ifsc-india",
+              "ssn-us",
+              "credit-card",
+              "aadhaar-india",
+              "aadhaar-india-contextual",
+              "amount-inr",
+              "amount-usd",
+              "contextual-phone",
+              "contextual-account-number",
+              "contextual-customer-id",
+              "contextual-passport-us",
+              "contextual-drivers-license-us"
+            ]
+          },
+          "default": [],
+          "description": "PII rules (@vaultline/core piiDetector, both structural and contextual) to turn OFF. Note this is separate from vaultline.enableHeuristicNameDetection, which has its own dedicated toggle since it's experimental and off by default."
+        },
+        "vaultline.disabledInfraRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "private-ip-standalone",
+              "public-ip-standalone",
+              "internal-url",
+              "external-url",
+              "unix-file-path",
+              "windows-file-path",
+              "mac-address",
+              "ipv6-standalone",
+              "ipv6-link-local",
+              "internal-hostname-contextual",
+              "port-contextual"
+            ]
+          },
+          "default": [],
+          "description": "Infrastructure rules (@vaultline/core infraDetector) to turn OFF — private/public IP, internal/external URL, unix/windows file paths, MAC address, IPv6 (standalone/link-local), hostname, port."
+        },
+        "vaultline.disabledConversationalSecretRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "proximity-password",
+              "proximity-passwd",
+              "proximity-pwd",
+              "proximity-pass",
+              "proximity-passphrase",
+              "proximity-secret",
+              "proximity-creds",
+              "proximity-credential",
+              "proximity-credentials",
+              "proximity-api-key",
+              "proximity-apikey",
+              "proximity-access-token",
+              "proximity-auth-token",
+              "proximity-bearer-token",
+              "proximity-client-secret",
+              "proximity-private-key",
+              "proximity-connection-string",
+              "proximity-token"
+            ]
+          },
+          "default": [],
+          "description": "Conversational secret keyword rules (@vaultline/core nlpProximityMatcher) to turn OFF, one per recognized keyword/phrase."
+        },
+        "vaultline.disabledSemanticRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "semantic-credential",
+              "semantic-api-key",
+              "semantic-pii-identifier",
+              "semantic-infrastructure"
+            ]
+          },
+          "default": [],
+          "description": "Semantic keyword matcher (@vaultline/core semanticKeywordMatcher) seed categories to turn OFF. Only relevant when vaultline.embeddingBackend is 'api' and vaultline.enableSemanticKeywordMatching is true."
+        },
+        "vaultline.enableSemanticKeywordMatching": {
+          "type": "boolean",
+          "default": true,
+          "description": "Last line of defense: catch keyword synonyms none of the other layers know about, using real embedding similarity. Only takes effect when vaultline.embeddingBackend is 'api' — silently does nothing on the hashing backend, since that approach was tried and found unreliable at single-word granularity."
+        },
+        "vaultline.semanticMatchThreshold": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Minimum cosine similarity for the semantic keyword matcher to treat a token as a keyword hit. This is the GATE; scores above it are then banded into low/medium/high confidence. Measured against all-MiniLM-L6-v2: unwanted ordinary words top out at 0.476 ('passed') while wanted synonyms bottom out at 0.598 ('mobile number'), so 0.5 separates them cleanly. Lowering it to 0.4 makes 'passed', 'license' and 'string' register as credential keywords."
+        },
+        "vaultline.enableToolCalling": {
+          "type": "boolean",
+          "default": true,
+          "description": "Give @vaultline access to the same tool registry (vscode.lm.tools) agent mode uses — file reading, terminal commands, MCP tools, etc. Every tool call's arguments are rehydrated and every result is redacted through the same pipeline as chat messages. Set false to restrict @vaultline to text-only responses (its original, pre-tool-calling behavior)."
+        },
+        "vaultline.enableSyntaxAwareRedaction": {
+          "type": "boolean",
+          "default": true,
+          "description": "Parse source code with tree-sitter so low-precision rules (currency amounts, IP/IPv6 literals, hostnames, ports, URLs, contextual PII, conversational keyword matching) stop firing inside COMMENTS, where they match documentation about credentials rather than credentials. Unambiguous secret rules — vendor API keys, PEM blocks, JWTs, connection strings, and explicit name=value credential assignments — keep firing in comments, so a commented-out password is still caught. Only applies when the language is known (a file read through a tool, or the active editor's language); fails open everywhere else."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "check:settings": "node scripts/checkSettings.js",
+    "//package": "Run `npm run package` from the repo root instead, so @vaultline/core is compiled first.",
+    "prepackage": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\"",
+    "package": "npm run check:settings && node scripts/stageCore.js --run -- npx --yes @vscode/vsce package --allow-missing-repository --out dist/",
+    "package:platforms": "npm run check:settings && node scripts/packagePlatforms.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@vaultline/core": "file:../core"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kashyapjain123/vaultline.git",
+    "directory": "packages/vscode-extension"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Vaultline Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      // The extension is a workspace package now, so this points at the
+      // package rather than the repo root — the repo root has no manifest
+      // VS Code would recognize as an extension.
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}/packages/vscode-extension"],
+      // Both packages: a breakpoint in the engine is as useful as one in the
+      // host, and the extension loads the core's compiled output.
+      "outFiles": [
+        "${workspaceFolder}/packages/vscode-extension/out/**/*.js",
+        "${workspaceFolder}/packages/core/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile"
+    }
+  ]
+}

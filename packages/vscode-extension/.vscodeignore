@@ -1,0 +1,45 @@
+# Portable build (`npm run package`) — one .vsix for every OS/arch.
+#
+# READ THIS BEFORE ADDING AN EXCLUSION UNDER A `!` LINE: vsce does not treat
+# these like .gitignore rules. A negation re-includes unconditionally, whatever
+# the order — so `!node_modules/@vaultline/core/**` beats any later
+# `node_modules/@vaultline/core/**/*.map`, and such a line silently does
+# nothing. What ships from a re-included tree is decided by
+# scripts/stageCore.js, which assembles node_modules immediately before
+# packaging and tears it down afterwards. This file only says which top-level
+# trees are eligible at all.
+
+.vscode/**
+.claude/**
+src/**
+test/**
+scripts/**
+.gitignore
+.vscodeignore
+.vscodeignore.bundled
+tsconfig.json
+.DS_Store
+dist/**
+*.vsix
+.model-cache-stash/**
+**/*.map
+
+node_modules/**
+
+# The engine: compiled JS, the precomputed category centroids, and the
+# embedding server's SOURCE. NOT its native dependencies — @xenova/transformers
+# pulls in onnxruntime-node and sharp, ~280MB of prebuilt binaries that would
+# make this VSIX platform-specific when nothing else in it is. The core's
+# serverManager installs those per-machine on first run instead, which keeps
+# one .vsix working on macOS, Windows and Linux alike. stageCore.js is what
+# leaves them out (it only copies them for `--with-server-deps`, which the
+# platform builds pass).
+!node_modules/@vaultline/core/**
+
+# The tree-sitter runtime and grammars, loaded at run time by the core's
+# syntaxAnalyzer. Without these the extension still works — syntax-aware
+# suppression just fails open and never fires — so if VSIX size matters more
+# than comment-awareness, drop the second line and keep only the grammars you
+# care about (e.g. typescript/javascript/json/python).
+!node_modules/web-tree-sitter/**
+!node_modules/tree-sitter-wasms/out/**

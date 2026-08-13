@@ -1,0 +1,42 @@
+# Ignore list for PLATFORM-SPECIFIC builds — used via
+# `vsce package --target <t> --ignoreFile .vscodeignore.bundled`, which
+# scripts/packagePlatforms.js drives. See that script for the why.
+#
+# The only difference from the portable .vscodeignore is what gets STAGED, not
+# what's listed here: packagePlatforms.js passes `--with-server-deps`, so the
+# embedding server's native dependencies (onnxruntime-node, sharp) and the
+# cached MiniLM weights are baked in for one OS/arch. That's what buys a
+# zero-setup install — no npm on the target machine, no network, no first-run
+# wait — at the cost of one artifact per platform instead of one for everyone.
+#
+# Same caveat as the portable file: a `!` line re-includes unconditionally, so
+# exclusions nested under one do nothing. scripts/stageCore.js decides the
+# contents of the re-included trees.
+
+.vscode/**
+.claude/**
+src/**
+test/**
+scripts/**
+.gitignore
+.vscodeignore
+.vscodeignore.bundled
+tsconfig.json
+.DS_Store
+dist/**
+*.vsix
+# packagePlatforms.js parks the model weights here between per-target
+# installs. It's a duplicate of the copy inside the staged tree — shipping it
+# would add ~23MB of the same files.
+.model-cache-stash/**
+**/*.map
+
+node_modules/**
+
+# The engine, INCLUDING the embedding server's installed dependencies —
+# that's the whole point of a platform build.
+!node_modules/@vaultline/core/**
+
+# The tree-sitter runtime and grammars, same as the portable build.
+!node_modules/web-tree-sitter/**
+!node_modules/tree-sitter-wasms/out/**

@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // The root script, which compiles @vaultline/core and then the
+      // extension — in that order, since the extension type-checks against
+      // the core's emitted declarations.
+      "type": "npm",
+      "script": "compile",
+      "problemMatcher": "$tsc",
+      "isBackground": false,
+      "presentation": {
+        "reveal": "silent"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}
