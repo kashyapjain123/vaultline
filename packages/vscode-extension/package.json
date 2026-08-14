@@ -6,7 +6,7 @@
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
   },
-  "version": "1.2.9",
+  "version": "1.3.0",
   "publisher": "vaultline",
   "icon": "icon.png",
   "engines": {
@@ -45,6 +45,14 @@
       {
         "command": "vaultline.rebuildCategoryEmbeddings",
         "title": "Vaultline: Rebuild Category Embeddings"
+      },
+      {
+        "command": "vaultline.setEmbeddingApiToken",
+        "title": "Vaultline: Set Embedding API Token"
+      },
+      {
+        "command": "vaultline.clearEmbeddingApiToken",
+        "title": "Vaultline: Clear Embedding API Token"
       },
       {
         "command": "vaultline.anonymizeSelection",
@@ -219,7 +227,8 @@
         "vaultline.embeddingApiAuthToken": {
           "type": "string",
           "default": "",
-          "description": "Credential for the embedding API — a bearer token, an API key, or 'username:password' for basic auth, depending on embeddingApiAuthType. SECURITY NOTE: this is stored in plain text in settings.json (and syncs via Settings Sync if enabled), same as every other setting here — this is not a production one. For anything beyond local testing, move this to VS Code's SecretStorage API (context.secrets) instead, which vscodeHost.ts does not currently use."
+          "description": "Credential for the embedding API — a bearer token, an API key, or 'username:password' for basic auth, depending on embeddingApiAuthType. SECURITY NOTE: this is stored in plain text in settings.json (and syncs via Settings Sync if enabled), same as every other setting here — this is not a production one. For anything beyond local testing, move this to VS Code's SecretStorage API (context.secrets) instead, which vscodeHost.ts does not currently use.",
+          "deprecationMessage": "Storing a token in settings.json puts it in plain text, shows it in the Settings UI, and lets Settings Sync copy it to your other machines. Run \"Vaultline: Set Embedding API Token\" to store it in your OS keychain instead. This setting is still read when the keychain holds nothing."
         },
         "vaultline.embeddingApiKeyHeader": {
           "type": "string",
@@ -247,10 +256,34 @@
           "minimum": 1,
           "description": "How many model round trips one request may take while the model keeps calling tools. Each round is one model call plus the tools it asks for. Raise it for long agentic work like reviewing a whole codebase — there is no upper bound, since it is your token budget and the Stop button cancels a run at any point. When the limit is reached Vaultline says so and shows whatever the model had produced, rather than stopping silently."
         },
+        "vaultline.embeddingApiFormat": {
+          "type": "string",
+          "enum": [
+            "vaultline",
+            "openai"
+          ],
+          "default": "vaultline",
+          "description": "Request/response shape your embedding endpoint speaks. 'vaultline' is the bundled server's: POST {texts} -> {embeddings}. 'openai' is what hosted providers implement: POST {input, model} -> {data:[{embedding, index}]}. Leave as 'vaultline' unless embeddingApiUrl points at a third-party service."
+        },
+        "vaultline.embeddingApiEmbedPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path appended to embeddingApiUrl for embedding calls, e.g. '/input/text'. Leave empty to use the format's default: '/embed-batch' for 'vaultline', '/v1/embeddings' for 'openai'."
+        },
+        "vaultline.embeddingApiHealthPath": {
+          "type": "string",
+          "default": "/health",
+          "description": "Path used to check the endpoint is reachable before routing switches to it. Set to an EMPTY string if your endpoint has no health route — most hosted services don't, and probing a route that doesn't exist made Vaultline treat the endpoint as down and silently fall back to the built-in hashing embedder. With probing off, an endpoint that really is unreachable simply fails open at the first call, so detection keeps running."
+        },
         "vaultline.trustCustomEmbeddingsForBlocking": {
           "type": "boolean",
           "default": false,
           "description": "When you point embeddingApiUrl at your own endpoint, Vaultline rebuilds its category centroids against that model automatically. Those rebuilt centroids still gate detection, but by default they are NOT trusted to block a whole message as confidential business content — an unvalidated model getting that wrong tells a developer their ordinary question is confidential. Turn this on once you've confirmed your model separates the categories cleanly."
+        },
+        "vaultline.persistSessionMappings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mirror this session's token-to-real-value table to a JSON file under the extension's storage directory. OFF by default, for the same reason as auditLogIncludeValues: that file holds every secret Vaultline detects, in plain text. Only useful for debugging the tokenizer — the session id is fresh on every activation, so the file is never read back."
         },
         "vaultline.auditLogIncludeValues": {
           "type": "boolean",
@@ -285,6 +318,7 @@
           "items": {
             "type": "string",
             "enum": [
+              "username-assignment",
               "email",
               "pan-india",
               "ifsc-india",
@@ -337,6 +371,12 @@
               "proximity-passphrase",
               "proximity-secret",
               "proximity-cred",
+              "proximity-username",
+              "proximity-user-name",
+              "proximity-userid",
+              "proximity-user-id",
+              "proximity-login",
+              "proximity-account-name",
               "proximity-creds",
               "proximity-credential",
               "proximity-credentials",

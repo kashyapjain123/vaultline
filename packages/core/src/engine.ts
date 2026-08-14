@@ -378,6 +378,42 @@ export class VaultlineEngine implements GuardContext {
     return built;
   }
 
+  /** Key the auth token is stored under in the host's secure storage. */
+  static readonly AUTH_TOKEN_SECRET_KEY = "vaultline.embeddingApiAuthToken";
+
+  /**
+   * Load the embedding API credential from secure storage and apply it.
+   *
+   * Precedence is keychain first, deprecated setting second. Keeping the
+   * setting readable means existing installs don't break the moment they
+   * update; preferring the keychain means anyone who has migrated is actually
+   * using it, even if a stale value is still sitting in their settings file.
+   */
+  private async applyAuthToken(): Promise<void> {
+    const settings = this.host.settings();
+    let token: string | undefined;
+    try {
+      token = await this.host.secret(VaultlineEngine.AUTH_TOKEN_SECRET_KEY);
+    } catch (err) {
+      this.log.append(`Could not read the embedding API token from secure storage: ${err}`);
+    }
+    if (!token) token = settings.embeddingApiAuthToken || undefined;
+
+    this.apiEmbedder.setAuthToken(token, settings.embeddingApiAuthType, settings.embeddingApiKeyHeader);
+  }
+
+  /** Store the embedding API token in the host's secure storage, replacing whatever was there. */
+  async setAuthToken(token: string): Promise<void> {
+    await this.host.storeSecret(VaultlineEngine.AUTH_TOKEN_SECRET_KEY, token);
+    await this.applyAuthToken();
+  }
+
+  /** Remove the stored token. The deprecated setting, if still populated, takes over again. */
+  async clearAuthToken(): Promise<void> {
+    await this.host.deleteSecret(VaultlineEngine.AUTH_TOKEN_SECRET_KEY);
+    await this.applyAuthToken();
+  }
+
   /**
    * Follow the server to wherever it actually landed.
    *
@@ -423,6 +459,9 @@ export class VaultlineEngine implements GuardContext {
       // Repoint BEFORE promoting the backend, so the first embed call after the
       // swap already targets the port the server actually bound.
       this.repointApiEmbedder();
+      // Before the backend is promoted, so the first embed call after the swap
+      // already carries the credential.
+      await this.applyAuthToken();
       // Then make sure the centroids describe THIS endpoint's vector space,
       // also before the swap — applyBackend picks the file, so building after
       // it would leave the router on the bundled centroids until something else
@@ -484,6 +523,8 @@ export class VaultlineEngine implements GuardContext {
 
 function buildApiEmbedder(settings: VaultlineSettings): ApiEmbedder {
   return new ApiEmbedder({
+    format: settings.embeddingApiFormat,
+    embedPath: settings.embeddingApiEmbedPath,
     baseUrl: settings.embeddingApiUrl,
     timeoutMs: settings.embeddingApiTimeoutMs,
     model: settings.embeddingApiModel.length > 0 ? settings.embeddingApiModel : undefined,

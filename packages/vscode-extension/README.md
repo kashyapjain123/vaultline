@@ -21,12 +21,17 @@ the password is hunter1isnotsecure
 The model receives this:
 
 ```
-write a python client for <<URL_1>>, the password is <<PASSWORD_1>>
+write a python client for https://<<HOSTNAME_1>>/api/getToken, the password is <<PASSWORD_1>>
 ```
 
-and you get the answer back with the real URL and password already restored in
+and you get the answer back with the real host and password already restored in
 the code. The model reasons perfectly well about `<<PASSWORD_1>>` — it just
 never learns what it stands for.
+
+Note the path survives. Only the **host** identifies your infrastructure;
+`/api/getToken` is generic REST vocabulary and is exactly what the model needs to
+write a working client, so redacting it would cost you a correct answer and
+protect nothing.
 
 Placeholders are **typed and stable**: the same value gets the same token for
 the whole session, so multi-step tool loops keep working. Tool arguments are
@@ -55,9 +60,12 @@ context forward for a couple of turns, so the value is still caught. Tune with
   like "my api key is …".
 - **PII** — emails, phone numbers, government IDs (SSN, Aadhaar, PAN,
   passport, driver's licence), card numbers (Luhn-checked), account numbers,
-  currency amounts.
-- **Infrastructure** — internal URLs and hostnames, private/public IPs, IPv6,
-  MAC addresses, ports, file paths.
+  currency amounts, and usernames / service accounts (`svc_corp_uat`).
+- **Infrastructure** — URL hosts, internal hostnames, private/public IPs, IPv6,
+  MAC addresses, ports, and file paths that identify an account or an
+  organisation (`/Users/you/…`, `/opt/acme-payments/…`). Universal paths like
+  `/usr/bin/python` and `/etc/nginx/nginx.conf` are left alone: they are
+  identical on every machine and reveal nothing.
 - **Business content** — a whole-message judgment (strategy, financials) that
   blocks rather than redacts, since there's no single span to replace.
 
@@ -106,6 +114,7 @@ rather than guessing.
 | **Test Detection Pipeline on Selection** | Runs the full pipeline over the selection without sending it anywhere, and without minting tokens a real conversation would have to resolve |
 | **Show Audit Log** | The local JSON-lines audit trail, tagged by source (`prompt` / `tool:<name>` / `history`) |
 | **Restart Embedding Server** | Recovers a wedged local model server, promoting routing back from the hashing fallback with no reload |
+| **Set / Clear Embedding API Token** | Keeps the embedding API credential in your OS keychain instead of settings.json |
 | **Rebuild Category Embeddings** | Only for custom endpoints. Rebuilds routing centroids against your model — needed when the same URL starts serving a *different* model, which nothing can detect automatically |
 | **Anonymize Selection / Document** | Rewrite detected values in place |
 | **Restore Document** | Put the original values back from the saved mapping |
@@ -151,7 +160,7 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 
 ## Configuration
 
-39 settings under `vaultline.*`. The ones most worth knowing:
+43 settings under `vaultline.*`. The ones most worth knowing:
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -165,6 +174,8 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 | `embeddingBackend` | `"api"` | `"api"` (local model server, auto-managed) or `"hashing"` (zero-setup, no server) |
 | `embeddingApiUrl` | local | Point at your own embedding service instead of the bundled one. Routing centroids are then **rebuilt against your model automatically**, once, and cached — see below |
 | `trustCustomEmbeddingsForBlocking` | `false` | Whether rebuilt centroids may block a whole message as confidential business content. Off until you've validated your model |
+| `embeddingApiFormat` / `embeddingApiEmbedPath` / `embeddingApiHealthPath` | `"vaultline"` / `""` / `"/health"` | Shape, path and health route of a custom endpoint. Set the health path to `""` if yours has no health route — most hosted services don't |
+| `persistSessionMappings` | `false` | Write this session's token-to-value table to disk. Off: that file holds every detected secret in plain text |
 | `auditLogIncludeValues` | `false` | Off by default — turning it on makes the audit log itself a plaintext record of every secret caught |
 | `anonymizeMode` | `"placeholder"` | `placeholder` / `hash` (reversible) or `mask` (not) |
 | `disabled*Rules` | `[]` | Per-category checkbox lists for excluding individual rules |
@@ -173,13 +184,25 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 
 ## Using your own embedding endpoint
 
-Set `embeddingApiUrl` (plus `embeddingApiAuthType` / `embeddingApiAuthToken` if
-it needs credentials). Your endpoint needs two routes:
+Set `embeddingApiUrl`, and run **Vaultline: Set Embedding API Token** if it needs
+a credential — that keeps the token in your OS keychain rather than in
+settings.json.
+
+Two shapes are supported, via `embeddingApiFormat`:
 
 ```
-POST {baseUrl}/embed-batch   { "texts": [...] }  ->  { "embeddings": [[...], ...] }
-GET  {baseUrl}/health                            ->  { "status": "ready" }
+"vaultline"  POST {baseUrl}/embed-batch     { "texts": [...] }
+                                         -> { "embeddings": [[...], ...] }
+
+"openai"     POST {baseUrl}/v1/embeddings   { "input": [...], "model": "..." }
+                                         -> { "data": [{ "embedding": [...], "index": 0 }] }
 ```
+
+Override the path with `embeddingApiEmbedPath` if yours differs (`/input/text`,
+say). **If your endpoint has no health route, set `embeddingApiHealthPath` to
+`""`** — Vaultline otherwise probes `GET {baseUrl}/health` before using the
+endpoint, and a missing route means it silently falls back to the built-in
+hashing embedder and never calls your service.
 
 Routing works by comparing your message against precomputed **category
 centroids**, and those only mean anything if they came from the same model doing

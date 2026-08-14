@@ -71,6 +71,36 @@ const REAL_FS_ROOTS = new Set([
 const HOME_ROOTS = new Set(["Users", "home", "root"]);
 
 /**
+ * Roots under which a path says something about THIS machine or THIS
+ * organisation, and is therefore worth redacting.
+ *
+ * REAL_FS_ROOTS above answers a different question — "is this a filesystem
+ * location at all, or a repo-relative fragment like /src/index.ts" — and it
+ * still has to be broad for that. But recognising a path is not the same as it
+ * being sensitive: `/dev/null`, `/usr/bin/python` and `/etc/nginx/nginx.conf`
+ * are byte-identical on every machine on earth. Redacting them cost the model
+ * useful context and revealed nothing in return.
+ *
+ * What remains is the two kinds that genuinely leak:
+ *   - account names — /Users/<name>, /home/<name>, /root
+ *   - product, project and share names — /opt/acme-payments/config.yml and
+ *     /Volumes/AcmeShare/finance say as much about an organisation as an
+ *     account name says about a person.
+ */
+const IDENTIFYING_ROOTS = new Set(["Users", "home", "root", "opt", "srv", "Volumes", "mnt", "media"]);
+
+/** True when a recognised filesystem path is one worth redacting — see IDENTIFYING_ROOTS. */
+function isIdentifyingPath(path: string): boolean {
+  const segments = path.split("/");
+  const firstSegment = segments[1] ?? "";
+  if (!IDENTIFYING_ROOTS.has(firstSegment)) return false;
+  // "/root" is itself an account's home directory, so it needs nothing after
+  // it. Every other root here only identifies something once a second segment
+  // names the user, product or volume — a bare "/opt" or "/Volumes" is generic.
+  return firstSegment === "root" || (segments[2] ?? "").length > 0;
+}
+
+/**
  * True if this looks like a real filesystem location on a real machine,
  * rather than a repo-relative path or a URL-ish fragment.
  *
@@ -224,8 +254,10 @@ function scanUrls(text: string): { matches: Match[]; spans: Array<[number, numbe
     if (!/^https?:\/\/\S/i.test(value)) continue;
 
     let host = "";
+    let url: URL | null = null;
     try {
-      host = new URL(value).hostname;
+      url = new URL(value);
+      host = url.hostname;
     } catch {
       // Malformed URL — still worth flagging at low confidence (unchanged
       // behaviour), just with no host analysis. The guard above already
@@ -235,15 +267,33 @@ function scanUrls(text: string): { matches: Match[]; spans: Array<[number, numbe
 
     if (host && isLoopbackHost(host)) continue;
 
+    // Redact the AUTHORITY only — hostname plus port — and leave the path in
+    // clear.
+    //
+    // The host is what's actually sensitive: it reveals internal naming,
+    // environment and topology. A path like /api/getToken is generic REST
+    // vocabulary that rarely reveals anything, and is exactly what a code
+    // assistant needs in order to write a working client. Tokenising the whole
+    // URL hid both, so the model could not produce a correct call and got
+    // nothing back in exchange for the loss.
+    //
+    // Falls back to the whole match when the authority can't be located (an
+    // unparsable URL, where `host` is empty) — over-redacting, which is the
+    // safe direction.
+    const authority = host ? (url?.port ? `${host}:${url.port}` : host) : "";
+    const authorityAt = authority ? value.indexOf(authority) : -1;
+    const redactStart = authorityAt >= 0 ? m.index + authorityAt : m.index;
+    const redactValue = authorityAt >= 0 ? authority : value;
+
     const internal = host ? isInternalHost(host) : false;
     matches.push({
       ruleId: internal ? "internal-url" : "external-url",
-      label: internal ? "Internal URL" : "URL",
+      label: internal ? "Internal URL Host" : "URL Host",
       severity: internal ? "medium" : "low",
       category: CATEGORY,
-      value,
-      start: m.index,
-      end: m.index + value.length,
+      value: redactValue,
+      start: redactStart,
+      end: redactStart + redactValue.length,
     });
   }
   return { matches, spans };
@@ -267,6 +317,7 @@ function scanFilePaths(text: string, excludeSpans: Array<[number, number]>): Mat
     if (overlapsAny(m.index, m.index + value.length, excludeSpans)) continue; // don't double-count a URL's path portion
     const precededByDot = m.index > 0 && text[m.index - 1] === ".";
     if (!isRealUnixPath(value, precededByDot)) continue; // repo-relative / URL-ish fragment — see isRealUnixPath
+    if (!isIdentifyingPath(value)) continue; // real, but universal — /dev/null tells nobody anything
     const isHome = isHomeDirectoryPath(value);
     matches.push({
       ruleId: "unix-file-path",

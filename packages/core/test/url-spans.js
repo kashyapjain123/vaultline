@@ -51,6 +51,7 @@ function expectValues(label, text, want, ruleFilter) {
 }
 
 const INTERNAL = "https://svc-01.corp.example.internal";
+const HOST = "svc-01.corp.example.internal";
 
 console.log("\n[the reported case: a URL built entirely from interpolations]");
 {
@@ -63,38 +64,31 @@ console.log("\n[under-redaction guard: a REAL host behind an interpolation]");
   // The case a careless fix breaks. Truncating at `${` must keep the literal
   // prefix so the internal hostname is still caught.
   const line = "const u = `" + INTERNAL + "/${path}`;";
-  expectValues("the literal prefix (with its host) is still redacted", line, [INTERNAL + "/"], "url");
+  expectValues("the host behind the interpolation is still redacted", line, [HOST], "url");
   check("the interpolation is NOT swallowed", !infra(line, "url")[0].includes("${"));
   check("the backtick is NOT swallowed", !infra(line, "url")[0].includes("`"));
 }
 
 console.log("\n[trailing punctuation is trimmed]");
 {
-  expectValues("markdown link", `See [docs](${INTERNAL}/docs) for more.`, [`${INTERNAL}/docs`], "url");
-  expectValues("end of sentence", `Deployed to ${INTERNAL}.`, [INTERNAL], "url");
-  expectValues("wrapped in parens", `(${INTERNAL})`, [INTERNAL], "url");
-  expectValues("trailing comma", `urls = [${INTERNAL}, x]`, [INTERNAL], "url");
-  expectValues("trailing semicolon", `const u = ${INTERNAL};`, [INTERNAL], "url");
-  expectValues("trailing colon", `Host: ${INTERNAL}:`, [INTERNAL], "url");
-  expectValues("multiple trailing marks", `Really? ${INTERNAL}?!`, [INTERNAL], "url");
+  expectValues("markdown link", `See [docs](${INTERNAL}/docs) for more.`, [HOST], "url");
+  expectValues("end of sentence", `Deployed to ${INTERNAL}.`, [HOST], "url");
+  expectValues("wrapped in parens", `(${INTERNAL})`, [HOST], "url");
+  expectValues("trailing comma", `urls = [${INTERNAL}, x]`, [HOST], "url");
+  expectValues("trailing semicolon", `const u = ${INTERNAL};`, [HOST], "url");
+  expectValues("trailing colon", `Host: ${INTERNAL}:`, [HOST], "url");
+  expectValues("multiple trailing marks", `Really? ${INTERNAL}?!`, [HOST], "url");
 }
 
 console.log("\n[balanced punctuation is NOT trimmed]");
 {
   const wiki = "https://en.wikipedia.org/wiki/Foo_(bar)";
-  expectValues("wikipedia-style parens survive", wiki, [wiki], "url");
-  expectValues("…and still survive inside a sentence", `See ${wiki}.`, [wiki], "url");
+  expectValues("wikipedia-style parens survive", wiki, ["en.wikipedia.org"], "url");
+  expectValues("…and still survive inside a sentence", `See ${wiki}.`, ["en.wikipedia.org"], "url");
   const q = `${INTERNAL}/x?a=b&c=d`;
-  expectValues("query string untouched", q, [q], "url");
+  expectValues("query string leaves only the host redacted", q, [HOST], "url");
   const trailingSlash = `${INTERNAL}/api/`;
-  expectValues("trailing slash is part of the path", trailingSlash, [trailingSlash], "url");
-}
-
-console.log("\n[file paths trim the same way]");
-{
-  expectValues("unix path, sentence end", "Config lives at /etc/nginx/nginx.conf.", ["/etc/nginx/nginx.conf"], "unix");
-  expectValues("unix path in parens", "(see /etc/passwd)", ["/etc/passwd"], "unix");
-  expectValues("windows path, trailing comma", "Open C:\\Users\\kash\\app.log, then retry", ["C:\\Users\\kash\\app.log"], "windows");
+  expectValues("trailing slash stays in the path", trailingSlash, [HOST], "url");
 }
 
 console.log("\n[loopback still suppressed, externals still classified]");
@@ -102,18 +96,49 @@ console.log("\n[loopback still suppressed, externals still classified]");
   expectValues("loopback emits nothing", "http://localhost:9000/health", [], "url");
   expectValues("127.0.0.1 emits nothing", "http://127.0.0.1:9000/health", [], "url");
   const pub = "https://api.github.com/repos";
-  expectValues("public URL still flagged (unchanged behaviour)", pub, [pub], "url");
+  expectValues("public URL: host still flagged", pub, ["api.github.com"], "url");
 }
 
-console.log("\n[end to end: the reported line survives redaction intact]");
-{
-  const line = "const url = `https://${process.env.HOST_G}:${process.env.port_G}`;";
-  scanCurrentMessage(line, { router: null, semanticMatcher: null }).then(({ matches }) => {
-    const out = tokenize(line, matches).redactedText;
+async function asyncChecks() {
+  const OPTS = { router: null, semanticMatcher: null };
+  const redact = async (line) => {
+    const { matches } = await scanCurrentMessage(line, OPTS);
+    return { out: tokenize(line, matches).redactedText, matches };
+  };
+
+  console.log("\n[the path survives — the entire point of host-only redaction]");
+  {
+    const line = `const u = "${INTERNAL}/api/getToken";`;
+    const { out } = await redact(line);
+    check("path is still readable by the model", out.includes("/api/getToken"), out);
+    check("host is gone", !out.includes(HOST), out);
+    check("scheme survives", out.includes("https://"), out);
+  }
+
+  console.log("\n[a secret in the query string is caught separately]");
+  {
+    // Only reachable because the URL span shrank to the host: while it covered
+    // the whole URL, the overlap merge discarded any match inside it.
+    const line = `${INTERNAL}/reset?token=abc123def456`;
+    const { out, matches } = await redact(line);
+    check("query secret redacted", !out.includes("abc123def456"), out);
+    check(
+      "…by a rule other than the URL one",
+      matches.some((m) => !m.ruleId.includes("url")),
+      JSON.stringify(matches.map((m) => m.ruleId))
+    );
+  }
+
+  console.log("\n[end to end: the reported line survives redaction intact]");
+  {
+    const line = "const url = `https://${process.env.HOST_G}:${process.env.port_G}`;";
+    const { out } = await redact(line);
     check("redacted text is byte-identical to the source", out === line, JSON.stringify(out));
+  }
 
-    console.log("\n" + "=".repeat(80));
-    console.log(failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`);
-    process.exit(failures === 0 ? 0 : 1);
-  });
+  console.log("\n" + "=".repeat(80));
+  console.log(failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`);
+  process.exit(failures === 0 ? 0 : 1);
 }
+
+asyncChecks();

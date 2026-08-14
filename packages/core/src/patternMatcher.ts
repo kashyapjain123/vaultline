@@ -27,7 +27,7 @@ export const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high
 // "is this a literal or is it code" judgement lives there beside
 // looksLikeSecretValue(), so every layer that has to answer a question about a
 // candidate value gets one shared answer rather than a private copy.
-import { looksLikeAssignedLiteral } from "./proximityUtils";
+import { looksLikeAssignedLiteral, looksLikeUsername } from "./proximityUtils";
 
 export type Category = "SECRET" | "PII" | "INFRA" | "BUSINESS";
 
@@ -195,6 +195,24 @@ export const DEFAULT_RULES: PatternRule[] = [
     regex: /["']?\b(?:password|passwd|pwd)\b["']?[ \t]*[:=][ \t]*['"]?([^\s'";,}()[\]{}]{6,})['"]?/gid,
     valueGroup: 1,
     valueFilter: looksLikeAssignedLiteral,
+  },
+  {
+    id: "username-assignment",
+    label: "Username Assignment",
+    severity: "medium",
+    category: "PII",
+    // Account names in their code/config forms: USERNAME=svc_corp_uat,
+    // "username": "svc_corp_uat", login = deploy_bot.
+    //
+    // valueFilter is looksLikeUsername rather than looksLikeAssignedLiteral,
+    // because an account name has no digit or symbol to prove itself with — the
+    // literal test that keeps `password: Optional[str]` out would reject every
+    // real username too. The type-word denylist inside looksLikeUsername is
+    // what keeps `username: string` from matching here.
+    regex:
+      /["']?\b(?:user[_-]?name|user[_-]?id|login|account[_-]?name)\b["']?[ \t]*[:=][ \t]*['"]?([A-Za-z][A-Za-z0-9._@-]{2,63})['"]?/gid,
+    valueGroup: 1,
+    valueFilter: (value) => looksLikeUsername(value),
   },
   {
     id: "env-var-secret",

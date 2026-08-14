@@ -153,6 +153,86 @@ export function looksLikeAssignedLiteral(value: string, wholeMatch: string): boo
   return /\d/.test(value) || CREDENTIAL_SYMBOLS.test(value);
 }
 
+/**
+ * Words that are a TYPE or a placeholder rather than somebody's account name.
+ *
+ * This list is the entire mechanism, and that is worth stating plainly rather
+ * than dressing up: `svc_corp_uat` and `string` are both bare identifiers, so
+ * after shape there is nothing structural left to separate a username from a
+ * type annotation. A denylist is the honest tool for the job.
+ */
+const TYPE_WORDS = new Set([
+  "string", "str", "int", "integer", "bool", "boolean", "float", "double", "decimal",
+  "none", "null", "nil", "undefined", "any", "unknown", "object", "text", "varchar",
+  "char", "uuid", "guid", "optional", "union", "list", "dict", "array", "number",
+  "date", "datetime", "timestamp", "self", "this", "value", "name", "user", "username",
+  "input", "field", "required", "default", "example", "todo", "changeme",
+  // Ordinary parameter and field names. looksLikeUsername is deliberately
+  // permissive — it has to accept `svc_corp_uat`, which has no digit or symbol
+  // to prove itself with — so the words that surround a username keyword in
+  // real code have to be excluded by name. Without these, `def login(self,
+  // email, password)` had "email" redacted as an account name.
+  "email", "mail", "password", "passwd", "pwd", "secret", "token", "key", "id",
+  "url", "uri", "host", "hostname", "port", "path", "data", "config", "params",
+  "args", "kwargs", "options", "opts", "request", "response", "req", "res",
+  "session", "client", "server", "context", "ctx", "payload", "body", "headers",
+  "result", "error", "err", "callback", "cb", "func", "fn", "def", "class",
+  "return", "async", "await", "import", "export", "const", "let", "var",
+  "credentials", "credential", "profile", "handler", "manager", "account",
+]);
+
+/**
+ * Is this an account name — a person's login, or a service account?
+ *
+ * SEPARATE from looksLikeSecretValue() and looksLikeAssignedLiteral() because
+ * both of those demand a digit or a symbol, and a username usually has neither:
+ * `svc_corp_uat` was reported unredacted in this project's very first bug and
+ * failed both tests. Usernames are ordinary identifiers, which is exactly what
+ * makes them hard — `username: string` has the identical shape.
+ *
+ * So: identifier-shaped, with a length floor that drops single letters, minus
+ * the type and placeholder words above. Verified to accept `svc_corp_uat`,
+ * `kashyap.jain`, `svc-prod-01`, `deploy_bot` and `admin` while rejecting
+ * `string`, `Optional`, `None`, `self`, `boolean`, `uuid`, `user` and `x`.
+ */
+export function looksLikeUsername(raw: string): boolean {
+  const v = stripValueQuotes(raw);
+  if (v.length < 3 || v.length > 64) return false;
+  if (!/^[A-Za-z][A-Za-z0-9._@-]*$/.test(v)) return false;
+
+  // MUST be qualified — contain a `.`, `_`, `-` or `@`.
+  //
+  // This is the structural half, and it is what makes the feature safe. A word
+  // list alone is whack-a-mole: extending it caught `string` and `email`, then
+  // `not` slipped through from `if not username or not password`, and the next
+  // ordinary word would have followed. Requiring a separator disqualifies every
+  // bare English and language keyword at once, without needing to name them.
+  //
+  // It fits the threat too. What matters here is service accounts and corporate
+  // logins — `svc_corp_uat`, `deploy_bot`, `kashyap.jain`, `svc-prod-01` — and
+  // those are qualified by construction.
+  //
+  // ACCEPTED RECALL LOSS: a single-word login (`jdoe`, `admin`) is not detected.
+  // It is indistinguishable from any other bare identifier, and the generic ones
+  // reveal nothing anyway — the same reasoning that stopped `/usr/bin` being
+  // redacted as a file path.
+  if (!/[._@-]/.test(v)) return false;
+
+  // Test each dot/underscore/hyphen separated part, not just the whole string.
+  // `username = user.name` is a property access, and rejecting it needs
+  // "user" and "name" to be recognised individually — as a single string
+  // `user.name` is in no denylist and sailed through, redacting code. Real
+  // account names (`kashyap.jain`, `svc_corp_uat`, `deploy_bot`) have no
+  // segment that is a type or placeholder word.
+  //
+  // ANY segment disqualifies, rather than all of them: `obj.username` is a
+  // property access too. The cost is an unusual account name built entirely
+  // from generic words (`admin.user`), which is a fair trade against redacting
+  // ordinary code.
+  const segments = v.toLowerCase().split(/[._-]/).filter(Boolean);
+  return !segments.some((part) => TYPE_WORDS.has(part));
+}
+
 /** Strips leading/trailing punctuation that isn't part of the actual value. */
 export function trimPunct(s: string): string {
   return s.replace(/^[.,;:!?)\]]+|[.,;:!?([]+$/g, "");

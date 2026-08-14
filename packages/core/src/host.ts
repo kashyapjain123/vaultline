@@ -77,6 +77,24 @@ export interface VaultlineHost {
   /** As warn(), at informational severity. */
   info(message: string, ...actions: string[]): Promise<string | undefined>;
 
+  /**
+   * Credential storage, backed by whatever the editor considers secure — the
+   * OS keychain, in VS Code's case.
+   *
+   * Separate from settings() because a settings file is the wrong place for a
+   * credential and always was: it is plain text, it is shown in clear in the
+   * settings UI, Settings Sync copies it to every other machine, and a
+   * workspace-level one gets committed. Vaultline shipped an
+   * `embeddingApiAuthToken` setting that did exactly that, which is a poor look
+   * for a tool whose whole argument is that credentials should not travel.
+   *
+   * A host with nowhere secure to put things may keep these in memory; the
+   * contract is only that they are not written to the settings file.
+   */
+  secret(key: string): Promise<string | undefined>;
+  storeSecret(key: string, value: string): Promise<void>;
+  deleteSecret(key: string): Promise<void>;
+
   withProgress<T>(options: ProgressOptions, task: (token: ProgressToken) => Promise<T>): Promise<T>;
 
   copyToClipboard(text: string): Promise<void>;
@@ -93,6 +111,8 @@ export const NEVER_CANCELLED: ProgressToken = { onCancelled: () => {} };
  */
 export class ConsoleHost implements VaultlineHost {
   private readonly resolved: VaultlineSettings;
+  /** In memory only. A CLI/test host has no keychain, and the contract is just "not the settings file". */
+  private readonly secrets = new Map<string, string>();
 
   constructor(settings: Partial<VaultlineSettings> = {}, private readonly storageDir = path.join(os.tmpdir(), "vaultline")) {
     this.resolved = { ...DEFAULT_SETTINGS, ...settings };
@@ -117,6 +137,18 @@ export class ConsoleHost implements VaultlineHost {
   async warn(message: string): Promise<string | undefined> {
     console.warn(`Vaultline: ${message}`);
     return undefined;
+  }
+
+  async secret(key: string): Promise<string | undefined> {
+    return this.secrets.get(key);
+  }
+
+  async storeSecret(key: string, value: string): Promise<void> {
+    this.secrets.set(key, value);
+  }
+
+  async deleteSecret(key: string): Promise<void> {
+    this.secrets.delete(key);
   }
 
   async info(message: string): Promise<string | undefined> {

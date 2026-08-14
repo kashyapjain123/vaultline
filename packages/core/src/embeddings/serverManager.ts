@@ -443,13 +443,44 @@ export class EmbeddingServerManager {
    * unhealthy.
    */
   private async probeHealth(baseUrl: string): Promise<boolean> {
+    // The configurable path applies to SOMEBODY ELSE'S endpoint only. For a
+    // loopback address this manager is choosing whether to adopt a server it
+    // owns, and that decision has to be made on our own /health contract:
+    // skipping the probe there would "adopt" a server that is still loading its
+    // model and answer every embed call with a 503.
+    const remote = !isLoopback(baseUrl);
+    const configured = (this.host.settings().embeddingApiHealthPath ?? "").trim();
+    const healthPath = remote ? configured : "/health";
+
+    // EMPTY (remote only) means "don't probe" — and that is the difference
+    // between a custom endpoint working and silently never being used. Hosted
+    // embedding services generally have no /health route, so probing one always
+    // failed, the manager reported the endpoint unreachable, and routing fell
+    // back to the hashing embedder without ever calling the configured URL.
+    //
+    // Optimistic is safe: if the endpoint really is down, the first embed call
+    // fails and EmbeddingRouter.scoreAll() already catches that and fails open,
+    // so detection keeps running either way.
+    if (healthPath.length === 0) return true;
+
+    const path = healthPath.startsWith("/") ? healthPath : `/${healthPath}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
     try {
-      const res = await fetch(`${toProbeUrl(baseUrl)}/health`, { signal: controller.signal });
+      const res = await fetch(`${toProbeUrl(baseUrl)}${path}`, { signal: controller.signal });
       if (!res.ok) return false;
-      const data = (await res.json()) as { status?: string };
-      return data.status === "ready";
+      // Our own server reports {status:"ready"} and distinguishes "loading",
+      // and on loopback that contract is required: anything else on the port is
+      // an impostor we must not adopt. A third-party health route reports
+      // whatever it likes, so there a 2xx alone counts — demanding our status
+      // string would put us straight back to never using the endpoint.
+      try {
+        const data = (await res.json()) as { status?: string };
+        if (typeof data?.status === "string") return data.status === "ready";
+      } catch {
+        // Not JSON.
+      }
+      return remote;
     } catch {
       return false;
     } finally {

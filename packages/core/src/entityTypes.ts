@@ -22,6 +22,19 @@ export function entityTypeFor(match: Match): string {
   if (id.includes("amount-usd")) return "AMOUNT_USD";
   if (id.includes("amount")) return "AMOUNT";
   if (id.includes("person-name")) return "PERSON";
+  // Every shape the username rules produce: the structural
+  // "username-assignment", and the proximity matcher's generated
+  // "proximity-<phrase>" ids (proximity-login, proximity-userid, ...).
+  if (
+    id.includes("username") ||
+    id.includes("user-name") ||
+    id.includes("user-id") ||
+    id.includes("userid") ||
+    id.includes("login") ||
+    id.includes("account-name")
+  ) {
+    return "USERNAME";
+  }
   if (id.includes("email")) return "EMAIL";
   if (id.includes("phone")) return "PHONE";
   if (id.includes("pan-india")) return "PAN";
@@ -56,6 +69,12 @@ export function entityTypeFor(match: Match): string {
   if (id.includes("mac-address")) return "MAC_ADDRESS";
   if (id.includes("ipv6")) return "IPV6";
   if (id.includes("ip")) return "IP_ADDRESS";
+  // The URL rules redact the AUTHORITY only (host, plus port) and leave the
+  // path in clear — see scanUrls in infraDetector.ts — so the value they carry
+  // IS a hostname and a URL token would misdescribe it. Sharing the type with
+  // internal-hostname-contextual is a bonus: EntityStore keys on
+  // `entityType::value`, so the same host found both ways gets one token.
+  if (id === "internal-url" || id === "external-url") return "HOSTNAME";
   if (id.includes("hostname")) return "HOSTNAME";
   if (id.includes("port")) return "PORT";
   if (id.includes("url")) return "URL";

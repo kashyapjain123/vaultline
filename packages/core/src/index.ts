@@ -42,6 +42,8 @@ export {
   RULE_IDS,
   SERVER_AFFECTING_SETTINGS,
   disabledRuleIds,
+  sanitizeSettings,
+  type EmbeddingApiFormat,
   type EmbeddingAuthType,
   type EmbeddingBackend,
   type VaultlineSettings,

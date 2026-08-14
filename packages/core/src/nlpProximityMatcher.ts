@@ -59,7 +59,7 @@
  */
 
 import { Match, Severity } from "./patternMatcher";
-import { looksLikeSecretValue, stripValueQuotes } from "./proximityUtils";
+import { looksLikeSecretValue, looksLikeUsername, stripValueQuotes } from "./proximityUtils";
 
 interface Token {
   text: string;
@@ -73,7 +73,32 @@ interface Token {
  * entries are matched as consecutive tokens. This list is meant to grow via
  * the audit-log feedback loop, same as the regex rules.
  */
-const SENSITIVE_KEYWORDS: { phrase: string[]; label: string }[] = [
+/**
+ * `valueTest` overrides looksLikeSecretValue for that keyword. Usernames need
+ * it: an account name has no digit or symbol, so the secret-shaped test that
+ * every other keyword relies on rejects `svc_corp_uat` outright.
+ */
+const SENSITIVE_KEYWORDS: {
+  phrase: string[];
+  label: string;
+  valueTest?: (raw: string) => boolean;
+  /**
+   * Search only AFTER the keyword, and only this far.
+   *
+   * Needed by the username keywords and by them alone. Every other keyword
+   * pairs with looksLikeSecretValue, which is strict enough that scanning
+   * backwards over a wide window is safe. A username is just an identifier, so
+   * the same wide two-directional search happily claimed whatever identifier
+   * happened to sit nearby: `def login(self, username: Optional[str])` redacted
+   * **def**, reaching backwards from `login`.
+   *
+   * Forward-only with a short reach matches how these are actually written —
+   * "username is svc_corp_uat", "login: deploy_bot" — and the words that would
+   * otherwise be captured (def, self, class) sit before the keyword, not after.
+   */
+  forwardOnly?: boolean;
+  window?: number;
+}[] = [
   { phrase: ["password"], label: "Password (conversational)" },
   { phrase: ["passwd"], label: "Password (conversational)" },
   { phrase: ["pwd"], label: "Password (conversational)" },
@@ -101,6 +126,21 @@ const SENSITIVE_KEYWORDS: { phrase: string[]; label: string }[] = [
   // bridge now that the fuzzy floor is 8, so it's listed explicitly. Safe as
   // an exact match — "tokn" is not an English word.
   { phrase: ["tokn"], label: "Token (conversational)" },
+
+  // Account names. A username beside a password is a whole credential, and a
+  // service account like `svc_corp_uat` also leaks environment and naming
+  // convention. These carry looksLikeUsername because the default
+  // secret-shaped test would reject every one of them.
+  { phrase: ["username"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
+  { phrase: ["user", "name"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
+  { phrase: ["userid"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
+  { phrase: ["user", "id"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
+  // NOT bare "login": it is a function name far more often than a field name
+  // ("def login(self, email, password)"), and with a value test as permissive as
+  // looksLikeUsername it claimed the first parameter. The assignment form
+  // `login: deploy_bot` is covered by the structural username-assignment rule,
+  // which requires an operator and so cannot match a call.
+  { phrase: ["account", "name"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
 ];
 
 // NOTE: there used to be a COMMON_WORD_DENYLIST here ("required", "policy",
@@ -292,13 +332,16 @@ export function scanProximityWithContext(text: string): ProximityScanResult {
       // arms cross-turn detection.
       keywordsSeen.push({ ruleId: "proximity-" + kw.phrase.join("-"), label: kw.label });
 
-      // Search both directions within the window for a value-looking token.
-      const searchStart = Math.max(0, kwStartIdx - WINDOW_SIZE);
-      const searchEnd = Math.min(tokens.length - 1, kwEndIdx + WINDOW_SIZE);
+      // Search for a value-looking token — both directions by default, forward
+      // only for keywords that say so (see forwardOnly above).
+      const reach = kw.window ?? WINDOW_SIZE;
+      const searchStart = kw.forwardOnly ? kwEndIdx + 1 : Math.max(0, kwStartIdx - reach);
+      const searchEnd = Math.min(tokens.length - 1, kwEndIdx + reach);
 
       for (let j = searchStart; j <= searchEnd; j++) {
         if (j >= kwStartIdx && j <= kwEndIdx) continue; // skip the keyword itself
-        if (!looksLikeSecretValue(tokens[j].text)) continue;
+        const valueTest = kw.valueTest ?? looksLikeSecretValue;
+        if (!valueTest(tokens[j].text)) continue;
 
         // IMPORTANT: only the value token itself gets tokenized/redacted —
         // NOT the keyword or connector words ("is", "was", "="). This keeps
