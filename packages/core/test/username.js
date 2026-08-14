@@ -114,8 +114,47 @@ async function main() {
   for (const v of ["svc_corp_uat", "kashyap.jain", "svc-prod-01", "deploy_bot"]) {
     check(`accepts ${v}`, looksLikeUsername(v));
   }
-  for (const v of ["string", "Optional", "None", "self", "boolean", "uuid", "user", "x", "user.name", "obj.username", "not", "admin", "email"]) {
+  for (const v of ["string", "Optional", "None", "self", "boolean", "uuid", "user", "x", "user.name", "obj.username", "not", "admin", "email", "svc_corp_uat.", "kashyap.jain-"]) {
     check(`rejects ${v}`, !looksLikeUsername(v));
+  }
+
+  console.log("\n[trailing punctuation belongs to the sentence, not the value]");
+  {
+    // Reported against 1.3.1. Checking secrets alongside it found something
+    // worse: the tokenizer keeps '.' inside a token (it must, for
+    // `kashyap.jain`), so `my password is hunter2isnotsecure.` matched NOTHING —
+    // looksLikeSecretValue rejects a dot — and the password went through in
+    // clear. An end-of-sentence secret was a silent leak, not a cosmetic bug.
+    const cases = [
+      ["username is svc_corp_uat.", "svc_corp_uat"],
+      ["login: kashyap.jain.", "kashyap.jain"],
+      ["the username is deploy_bot!", "deploy_bot"],
+      ["user_id = svc-prod-01;", "svc-prod-01"],
+      ["username is svc_corp_uat, and more", "svc_corp_uat"],
+    ];
+    for (const [text, want] of cases) {
+      const store = new EntityStore();
+      const { redactedText } = await redact(text, store);
+      const stored = (store.allMappings()[0] ?? {}).originalValue;
+      check(`${text} -> ${want}`, stored === want, `stored ${JSON.stringify(stored)}`);
+      check(`punctuation survives: ${text}`, restore(redactedText, store.allMappings()) === text, redactedText);
+    }
+  }
+
+  console.log("\n[the leak found alongside it: secrets ending a sentence]");
+  {
+    const cases = [
+      ["my password is hunter2isnotsecure.", "hunter2isnotsecure"],
+      ["the api key is ab12cd34ef56gh78.", "ab12cd34ef56gh78"],
+      ["the secret is Hunter@123!", "Hunter@123"],
+    ];
+    for (const [text, want] of cases) {
+      const store = new EntityStore();
+      const { redactedText } = await redact(text, store);
+      check(`${want} is redacted at end of sentence`, !redactedText.includes(want), redactedText);
+      const stored = (store.allMappings()[0] ?? {}).originalValue;
+      check(`…and stored without the punctuation`, stored === want, `stored ${JSON.stringify(stored)}`);
+    }
   }
 
   console.log("\n[round trip]");

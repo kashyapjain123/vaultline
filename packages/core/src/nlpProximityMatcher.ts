@@ -340,8 +340,12 @@ export function scanProximityWithContext(text: string): ProximityScanResult {
 
       for (let j = searchStart; j <= searchEnd; j++) {
         if (j >= kwStartIdx && j <= kwEndIdx) continue; // skip the keyword itself
+        // Span first, THEN test: the test has to see the trimmed value, or a
+        // token like `hunter2isnotsecure.` is rejected for the full stop the
+        // tokenizer glued on and the secret is never redacted.
+        const candidate = unquotedSpan(tokens[j].text, tokens[j].start);
         const valueTest = kw.valueTest ?? looksLikeSecretValue;
-        if (!valueTest(tokens[j].text)) continue;
+        if (!valueTest(candidate.value)) continue;
 
         // IMPORTANT: only the value token itself gets tokenized/redacted —
         // NOT the keyword or connector words ("is", "was", "="). This keeps
@@ -349,11 +353,7 @@ export function scanProximityWithContext(text: string): ProximityScanResult {
         // (e.g. "my password is [SEC-2]") instead of swallowing it into the
         // token (e.g. "my [SEC-2]"), which would lose useful context for no
         // privacy benefit — the keyword alone reveals nothing sensitive.
-        const valueTok = tokens[j];
-        // unquotedSpan, not valueTok.start/end: the span has to match the value
-        // being stored, or restoring the answer drops the quotes and hands the
-        // developer back broken syntax. See proximityUtils.unquotedSpan().
-        const span = unquotedSpan(valueTok.text, valueTok.start);
+        const span = candidate;
 
         matches.push({
           ruleId: "proximity-" + kw.phrase.join("-"),

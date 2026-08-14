@@ -66,13 +66,36 @@ export function stripValueQuotes(s: string): string {
  * matchers, shared so the two cannot drift apart again.
  */
 export function unquotedSpan(token: string, start: number): { start: number; end: number; value: string } {
-  const value = stripValueQuotes(token);
-  // A quote pair was found and removed exactly when the value is two characters
-  // shorter, so the offset is one on each side.
-  const quoted = value.length === token.length - 2;
-  return quoted
-    ? { start: start + 1, end: start + 1 + value.length, value }
-    : { start, end: start + token.length, value };
+  // Strip REPEATEDLY. A token can carry more than one quote pair — a
+  // single-quoted string containing a double-quoted one, `'"sk_live_..."'`, is
+  // ordinary in source code — and peeling only the outer layer left a quote in
+  // the stored value while looksLikeSecretValue() peeled a second layer of its
+  // own before testing. The two disagreed, so the value passed the test and was
+  // stored with a quote still attached.
+  let unquoted = token;
+  let offset = start;
+  for (;;) {
+    const next = stripValueQuotes(unquoted);
+    if (next.length !== unquoted.length - 2) break;
+    unquoted = next;
+    offset += 1;
+  }
+
+  // Then drop sentence punctuation off the end.
+  //
+  // The tokenizer keeps `.` inside a token — it has to, for `kashyap.jain` and
+  // `os.environ` — so a value that ends a sentence arrives as
+  // `hunter2isnotsecure.` with the full stop attached. That was not merely
+  // cosmetic: looksLikeSecretValue() rejects anything with a dot under Shape A,
+  // so `my password is hunter2isnotsecure.` matched NOTHING and the password
+  // went through in clear. Trimming here, before the value test runs, is what
+  // makes an end-of-sentence secret detectable at all.
+  //
+  // Only trailing characters, and only punctuation that ends a sentence or a
+  // clause — an INTERNAL dot is part of the value (`kashyap.jain` must survive),
+  // and a trailing `-` or `_` is not sentence punctuation.
+  const value = unquoted.replace(/[.,;:!?)\]}]+$/, "");
+  return { start: offset, end: offset + value.length, value };
 }
 
 /**
@@ -237,6 +260,12 @@ export function looksLikeUsername(raw: string): boolean {
   const v = stripValueQuotes(raw);
   if (v.length < 3 || v.length > 64) return false;
   if (!/^[A-Za-z][A-Za-z0-9._@-]*$/.test(v)) return false;
+
+  // Never ends on a separator. `kashyap.jain.` is the same account name with a
+  // sentence's full stop attached, and storing that would redact the punctuation
+  // too — the proximity path trims it in unquotedSpan(), and this makes the
+  // predicate itself refuse to be handed one.
+  if (/[._@-]$/.test(v)) return false;
 
   // MUST be qualified — contain a `.`, `_`, `-` or `@`.
   //

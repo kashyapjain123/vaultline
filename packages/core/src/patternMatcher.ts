@@ -214,7 +214,13 @@ export const DEFAULT_RULES: PatternRule[] = [
     // real username too. The type-word denylist inside looksLikeUsername is
     // what keeps `username: string` from matching here.
     regex:
-      /["'`]?\b(?:user[_-]?name|user[_-]?id|login|account[_-]?name)\b["'`]?[ \t]*[:=][ \t]*['"`]?([A-Za-z][A-Za-z0-9._@-]{2,63})['"`]?/gid,
+      // The capture must END on an alphanumeric. Separators are legal INSIDE an
+      // account name (`kashyap.jain`, `svc_corp_uat`) but never at the end, so
+      // without this `login: kashyap.jain.` swallowed the sentence's full stop
+      // into the value. Same trailing-punctuation family as the URL and path
+      // rules; the proximity path handles it in unquotedSpan(), this is the
+      // structural half.
+      /["'`]?\b(?:user[_-]?name|user[_-]?id|login|account[_-]?name)\b["'`]?[ \t]*[:=][ \t]*['"`]?([A-Za-z][A-Za-z0-9._@-]{1,62}[A-Za-z0-9])['"`]?/gid,
     valueGroup: 1,
     valueFilter: (value) => looksLikeUsername(value),
   },

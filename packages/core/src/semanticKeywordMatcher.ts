@@ -292,12 +292,11 @@ export class SemanticKeywordMatcher {
       for (let j = lo; j <= hi; j++) {
         if (j === tokenIdx) continue;
         if (overlapsExisting(tokens[j].start, tokens[j].end)) continue;
-        if (!looksLikeSecretValue(tokens[j].text)) continue;
-
-        const valueTok = tokens[j];
-        // Same span rule as nlpProximityMatcher: quotes stay in the document so
-        // the restored answer is still valid syntax.
-        const span = unquotedSpan(valueTok.text, valueTok.start);
+        // Span first, then test — same reason as nlpProximityMatcher: the value
+        // test must see the trimmed value, not the token with a sentence's full
+        // stop attached.
+        const span = unquotedSpan(tokens[j].text, tokens[j].start);
+        if (!looksLikeSecretValue(span.value)) continue;
 
         matches.push({
           ruleId: `semantic-${best.key}`,
