@@ -6,4 +6,3 @@ dist/
 .model-cache-stash/
 .DS_Store
 /temp
-packages/core/test/test_detection.txt
