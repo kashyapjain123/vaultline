@@ -56,7 +56,9 @@ import {
 } from "@vaultline/core";
 import * as vscode from "vscode";
 
-const MAX_TOOL_ROUNDS = 8;
+// The tool-round limit used to be a hardcoded 8 here. It is now
+// vaultline.maxToolRounds (default 25), because 8 was routinely exhausted by
+// ordinary multi-step work — and exhausting it rendered nothing at all.
 
 export function registerVaultlineParticipant(
   context: vscode.ExtensionContext,
@@ -237,7 +239,22 @@ export function registerVaultlineParticipant(
     try {
       let finalText = "";
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const maxRounds = Math.max(1, Math.floor(settings.maxToolRounds));
+      let roundsUsed = 0;
+      let exhausted = true;
+
+      for (let round = 0; round < maxRounds; round++) {
+        // Checked per round, not just inside sendRequest: without this, pressing
+        // Stop while tools were running still let the loop open another round.
+        // This is what makes an unbounded maxToolRounds safe — the user can
+        // always end a run, so the setting doesn't need an arbitrary ceiling
+        // standing in for a cancel button.
+        if (token.isCancellationRequested) {
+          exhausted = false;
+          break;
+        }
+
+        roundsUsed = round + 1;
         // Usually the longest wait in the whole handler, and previously the
         // most silent.
         stream.progress(round === 0 ? "Waiting for the model…" : `Waiting for the model (round ${round + 1})…`);
@@ -277,8 +294,17 @@ export function registerVaultlineParticipant(
 
         if (toolCalls.length === 0) {
           finalText = roundText;
+          exhausted = false;
           break;
         }
+
+        // Keep this round's narration even though the model also asked for
+        // tools. finalText used to be assigned ONLY on the no-tool-calls branch
+        // above, so running out of rounds left it empty and the handler
+        // rendered stream.markdown("") — the developer got no answer and no
+        // explanation, which is exactly what "after 8 rounds it just stops"
+        // looked like from the outside.
+        if (roundText.trim().length > 0) finalText = roundText;
 
         stream.markdown(
           `\n\n🔧 *Vaultline: running ${toolCalls.length} tool call(s) — ${toolCalls.map((c) => c.name).join(", ")}*\n\n`
@@ -357,7 +383,51 @@ export function registerVaultlineParticipant(
         messages.push(vscode.LanguageModelChatMessage.User(resultParts));
       }
 
+      if (exhausted) {
+        // Say so explicitly. Running out of rounds mid-task is not an error the
+        // model can report — from its side the conversation simply stopped — so
+        // silence here reads as a hang or a crash.
+        stream.markdown(
+          `\n\n⚠️ *Vaultline stopped after ${roundsUsed} tool round(s) — the \`vaultline.maxToolRounds\` limit. ` +
+            `Raise the setting for long tasks, or ask for a smaller piece of the work.*\n\n`
+        );
+
+        // WRAP-UP ROUND. Without this, hitting the limit often produced the
+        // warning and then nothing at all: `finalText` only ever holds prose the
+        // model happened to emit alongside its tool calls, and in agentic work
+        // it frequently emits none — every round is pure tool calls.
+        //
+        // Sending `tools: []` is what makes this work. With no tools to reach
+        // for, the model's only available move is to write, so a summary of what
+        // it actually found comes back instead of another tool request. One
+        // extra model call, and only on the path that would otherwise have
+        // ended in silence.
+        try {
+          stream.progress("Out of tool rounds — asking the model to summarise what it found…");
+          messages.push(
+            vscode.LanguageModelChatMessage.User(
+              "You have reached the limit on tool calls for this request and no more tools are available. " +
+                "Do not ask for any more tools. Using only what you have already gathered, summarise what you " +
+                "found, anything you changed, and what still remains to be done."
+            )
+          );
+          const wrapUp = await request.model.sendRequest(messages, { tools: [] }, token);
+          let summary = "";
+          for await (const part of wrapUp.stream) {
+            if (part instanceof vscode.LanguageModelTextPart) summary += part.value;
+          }
+          if (summary.trim().length > 0) finalText = summary;
+        } catch (wrapErr) {
+          // Most likely the context window, which is what actually ends a long
+          // run — see the note on messages growing every round. Keep whatever
+          // prose we already had; the warning above already explains the stop,
+          // so this must never turn a partial answer into a failed request.
+          toolLog.append(`Wrap-up round failed: ${wrapErr}\n`);
+        }
+      }
+
       // --- Reverse-substitute before the developer ever sees the answer ---
+
       stream.progress("Restoring your real values into the answer…");
       const { text: restored, suspiciousTokens } = session.restoreResponse(finalText);
 

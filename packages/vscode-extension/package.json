@@ -6,7 +6,7 @@
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
   },
-  "version": "1.2.8",
+  "version": "1.2.9",
   "publisher": "vaultline",
   "icon": "icon.png",
   "engines": {
@@ -240,6 +240,12 @@
           },
           "default": [],
           "description": "Tool names never to offer the model, e.g. ['mcp_noisy_*']. '*' is a wildcard and matching is case-insensitive. Use this to spend your tool budget (see vaultline.maxTools) on the integrations you actually want rather than letting the cap decide."
+        },
+        "vaultline.maxToolRounds": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "description": "How many model round trips one request may take while the model keeps calling tools. Each round is one model call plus the tools it asks for. Raise it for long agentic work like reviewing a whole codebase — there is no upper bound, since it is your token budget and the Stop button cancels a run at any point. When the limit is reached Vaultline says so and shows whatever the model had produced, rather than stopping silently."
         },
         "vaultline.trustCustomEmbeddingsForBlocking": {
           "type": "boolean",

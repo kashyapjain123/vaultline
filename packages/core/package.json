@@ -1,7 +1,7 @@
 {
   "name": "@vaultline/core",
-  "version": "1.2.8",
-  "description": "Editor-agnostic detection, redaction and policy engine for Vaultline \u2014 zero-trust context control for AI coding agents.",
+  "version": "1.2.9",
+  "description": "Editor-agnostic detection, redaction and policy engine for Vaultline — zero-trust context control for AI coding agents.",
   "author": {
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"

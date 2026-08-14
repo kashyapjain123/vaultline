@@ -79,6 +79,8 @@ export interface VaultlineSettings {
   maxTools: number;
   /** Tool-name patterns to never offer the model. `*` is a wildcard. */
   toolDenyList: string[];
+  /** How many model round trips a single request may take when the model keeps calling tools. */
+  maxToolRounds: number;
 }
 
 export const DEFAULT_SETTINGS: VaultlineSettings = {
@@ -140,6 +142,12 @@ export const DEFAULT_SETTINGS: VaultlineSettings = {
   // it is a provider detail — see parseToolLimitFromError in toolSelection.ts.
   maxTools: 128,
   toolDenyList: [],
+  // Was a hardcoded 8, which a "review the whole codebase" request exhausted
+  // routinely — and exhausting it produced NO answer at all, since the final
+  // text was only ever captured on a round that made no tool calls. 25 is
+  // roomy enough for real multi-step work while still bounding a runaway loop,
+  // and it is now a setting because the right number depends on the task.
+  maxToolRounds: 25,
 };
 
 /**
