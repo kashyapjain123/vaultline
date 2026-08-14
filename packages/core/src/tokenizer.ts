@@ -165,6 +165,25 @@ export function findUnrestoredTokens(text: string): string[] {
  * System-instruction fragment telling the model to leave tokens untouched.
  * Calls out the <<TYPE_N>> format specifically, since that shape (not
  * [SEC-N]) is what's actually being sent now.
+ *
+ * The second paragraph exists because the first one, on its own, was
+ * incomplete in a way that showed up in use. It tells the model what a token
+ * IS but not what happens to it afterwards, so a model that has correctly
+ * understood "a real value you cannot see" draws the sensible conclusion that
+ * the DEVELOPER cannot see it either — and stops to ask for it, or answers
+ * around it, or appends "replace <<PASSWORD_1>> with your real password". None
+ * of that is wrong given what it was told; it just doesn't know that
+ * restoreResponse() swaps every token back before the answer is displayed.
+ *
+ * So the instruction has to cover both directions: don't reveal the value
+ * upward (paragraph one), and don't withhold the ANSWER downward on account of
+ * a value that the developer is, in fact, about to see (paragraph two).
+ *
+ * Hosts should prepend this per request rather than once per conversation.
+ * Chat APIs are stateless — the whole message array is resent every turn — and
+ * this synthetic message is not part of the host's own chat history, so
+ * sending it only on the first turn leaves every later turn with no
+ * instruction at all.
  */
 export const TOKEN_PRESERVATION_INSTRUCTION =
   "Some values in this conversation have been replaced with placeholder " +
@@ -174,4 +193,12 @@ export const TOKEN_PRESERVATION_INSTRUCTION =
   "word to translate, summarize, or replace with a description. " +
   "Reproduce every token exactly, character for character including the " +
   "double angle brackets, wherever it would logically appear in your " +
-  "response. Do not guess, infer, reconstruct, or omit the original value.";
+  "response. Do not guess, infer, reconstruct, or omit the original value.\n\n" +
+  "The developer is NOT missing this information. Every token is " +
+  "automatically substituted back to its real value before the response " +
+  "reaches them, so they will read your answer with the real values in " +
+  "place. Answer exactly as you would if the real values were visible to " +
+  "you: do not ask the developer to supply, confirm, or paste the " +
+  "underlying value; do not pause or refuse to continue until you have it; " +
+  "and do not add notes, warnings, or TODOs saying that a placeholder needs " +
+  "to be filled in. The substitution is handled for you in both directions.";

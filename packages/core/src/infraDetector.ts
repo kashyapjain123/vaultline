@@ -11,7 +11,7 @@
  */
 
 import { Match, Severity, Category } from "./patternMatcher";
-import { tokenize, trimPunct, cleanWord, isNumericToken, hasKeywordNear } from "./proximityUtils";
+import { tokenize, trimPunct, cleanWord, isNumericToken, hasKeywordNear, unquotedSpan } from "./proximityUtils";
 
 const CATEGORY: Category = "INFRA";
 
@@ -487,12 +487,67 @@ const HOSTNAME_CONTEXT_KEYWORDS = [
 ];
 const HOSTNAME_WINDOW = 4;
 
+/**
+ * A dotted, fully-qualified name: two or more labels.
+ *
+ * HOSTNAME_SHAPE above is anchored and dot-free, so it only ever matched a
+ * single label like `prod-db`. That left the most ordinary way of writing an
+ * internal host — `host: "internal-db.corp.example.com"` in a config file —
+ * undetected unless it happened to sit inside a URL, where the URL rule
+ * reaches it via isInternalHost(). Found by pointing the CLI's redaction suite
+ * at a realistic config.yaml, where it went through in clear.
+ */
+const FQDN_SHAPE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
+
+/**
+ * Is this FQDN structurally distinguishable from a filename?
+ *
+ * This rule needs no nearby keyword, because isInternalHost() is already a
+ * conservative predicate — it demands `.local`, `.internal`, a private IP, or
+ * a whole label from INTERNAL_HOST_HINTS. But those hints are short words that
+ * also occur as filenames: `svc.ts` and `cluster.py` both contain a hint label
+ * and would otherwise be redacted out of perfectly ordinary source code.
+ *
+ * Requiring three labels separates them, since a filename is nearly always
+ * two. `db.internal` is the exception worth keeping at two, and it is
+ * unambiguous because the suffix is a reserved internal one rather than a hint
+ * word.
+ */
+function isQualifiedHostShape(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (lower.endsWith(".local") || lower.endsWith(".internal")) return true;
+  return lower.split(".").length >= 3;
+}
+
 function scanHostnames(text: string): Match[] {
   const tokens = tokenize(text);
   const matches: Match[] = [];
 
   for (let i = 0; i < tokens.length; i++) {
     const clean = trimPunct(tokens[i].text);
+
+    // Fully-qualified internal names first — context-free, since the name
+    // itself carries the evidence.
+    //
+    // unquotedSpan rather than trimPunct: a hostname in a config file is
+    // almost always quoted (`host: "internal-db.corp.example.com"`), and
+    // tokenize() keeps the quotes inside the token. It also puts the span
+    // inside the quote pair, so the redacted line stays syntactically valid —
+    // the same reason the assignment rules adopted it in 1.3.1.
+    const unquoted = unquotedSpan(tokens[i].text, tokens[i].start);
+    if (FQDN_SHAPE.test(unquoted.value) && isQualifiedHostShape(unquoted.value) && isInternalHost(unquoted.value)) {
+      matches.push({
+        ruleId: "internal-hostname",
+        label: "Internal Hostname",
+        severity: "medium",
+        category: CATEGORY,
+        value: unquoted.value,
+        start: unquoted.start,
+        end: unquoted.end,
+      });
+      continue;
+    }
+
     if (!HOSTNAME_SHAPE.test(clean)) continue;
     if (!/\d/.test(clean)) continue; // require a digit — cuts down on ordinary hyphenated phrases
     if (!hasKeywordNear(tokens, i, HOSTNAME_CONTEXT_KEYWORDS, HOSTNAME_WINDOW)) continue;

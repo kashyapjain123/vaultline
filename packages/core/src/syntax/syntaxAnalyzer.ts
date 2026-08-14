@@ -102,6 +102,72 @@ const LANGUAGE_ID_TO_GRAMMAR: Record<string, string> = {
   dart: "dart", elixir: "elixir", elm: "elm", zig: "zig", solidity: "solidity",
 };
 
+/**
+ * Grammars that ship broken, and the hash-comment scanner used instead.
+ *
+ * tree-sitter-wasms@0.1.13 builds tree-sitter-yaml at ABI 13 while everything
+ * else is ABI 14, and every parse through it throws `TypeError: _ is not a
+ * function` — even on an empty string, so it is the grammar rather than any
+ * particular input. 0.1.13 is the newest release, so there is nothing to
+ * upgrade to.
+ *
+ * That mattered more than a noisy warning. commentSpans feeds comment
+ * suppression in detectionPipeline, so with YAML failing, a commented-out
+ * example like `# password: example123` was being redacted as a live
+ * credential — in the file type the Copilot CLI host exists to review.
+ *
+ * YAML's comment rule is small enough to implement exactly: `#` starts a
+ * comment when it is at the start of a line or preceded by whitespace, it runs
+ * to end of line, and it does not apply inside a quoted scalar. TOML and shell
+ * share those rules, so they are handled by the same scanner — bash has a
+ * working grammar today and stays with it, but the fallback is here if that
+ * changes.
+ */
+const HASH_COMMENT_FALLBACK = new Set(["yaml", "toml"]);
+
+/**
+ * Comment spans for `#`-comment languages, without a grammar.
+ *
+ * Quote tracking is the only subtlety: `url: "http://x/#anchor"` contains a
+ * `#` that is not a comment. YAML has no escape processing inside single
+ * quotes ('' is a literal quote) and standard backslash escapes inside double
+ * quotes, which is what the escape branch below covers.
+ */
+export function hashCommentSpans(text: string): Span[] {
+  const spans: Span[] = [];
+  let quote: '"' | "'" | null = null;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (ch === "\n") {
+      quote = null; // an unterminated scalar cannot span a line here
+      continue;
+    }
+
+    if (quote) {
+      if (ch === "\\" && quote === '"') i++; // skip the escaped character
+      else if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+
+    // Start of line, or preceded by whitespace — `a#b` is a value, not a comment.
+    if (ch === "#" && (i === 0 || /\s/.test(text[i - 1]))) {
+      const end = text.indexOf("\n", i);
+      const stop = end === -1 ? text.length : end;
+      spans.push([i, stop]);
+      i = stop;
+    }
+  }
+
+  return spans;
+}
+
 /** Resolves a file path or editor language id to a grammar name, or null if we have no grammar for it. */
 export function grammarForFile(filePathOrLanguageId: string): string | null {
   const direct = LANGUAGE_ID_TO_GRAMMAR[filePathOrLanguageId.toLowerCase()];
@@ -206,6 +272,11 @@ export class SyntaxAnalyzer {
 
     const grammar = grammarForFile(filePathOrLanguageId);
     if (!grammar) return [];
+
+    // Checked before the parser is even initialised: these grammars are known
+    // broken, so loading one only produces a warning and an empty result.
+    if (HASH_COMMENT_FALLBACK.has(grammar)) return hashCommentSpans(text);
+
     if (!(await this.ensureParser())) return [];
 
     const language = await this.ensureLanguage(grammar);

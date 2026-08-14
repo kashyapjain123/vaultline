@@ -234,6 +234,7 @@ export const RULE_IDS = {
     "mac-address",
     "ipv6-standalone",
     "ipv6-link-local",
+    "internal-hostname",
     "internal-hostname-contextual",
     "port-contextual",
   ],

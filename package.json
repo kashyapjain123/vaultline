@@ -1,8 +1,8 @@
 {
   "name": "vaultline-workspace",
   "private": true,
-  "version": "1.3.2",
-  "description": "Repository root for Vaultline: the editor-agnostic detection engine (@vaultline/core, packages/core) and the VS Code host that embeds it (packages/vscode-extension). The engine has no editor dependency and can be extracted with `git subtree split --prefix=packages/core` if a second host ever needs it.",
+  "version": "1.4.0",
+  "description": "Repository root for Vaultline: the editor-agnostic detection engine (@vaultline/core, packages/core) and the two hosts that embed it — VS Code (packages/vscode-extension) and GitHub Copilot CLI (@vaultline/cli, packages/cli). The engine has no editor dependency, which is what made the second host a matter of implementing VaultlineHost rather than reimplementing detection.",
   "author": {
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
@@ -10,14 +10,17 @@
   "//workspaces": "Deliberately NOT an npm workspace. vsce resolves an extension's shippable files by running `npm list` in the extension directory, and inside a workspace npm answers for the whole repo — so vsce walks the entire tree and collects files from outside the package. Each package installs its own node_modules instead; scripts/setup.js does both.",
   "scripts": {
     "setup": "node scripts/setup.js",
-    "//compile": "Order matters: the extension type-checks against the core's emitted .d.ts, so the core builds first.",
-    "compile": "npm --prefix packages/core run compile && npm --prefix packages/vscode-extension run compile",
+    "//compile": "Order matters: both hosts type-check against the core's emitted .d.ts, so the core builds first.",
+    "compile": "npm --prefix packages/core run compile && npm --prefix packages/vscode-extension run compile && npm --prefix packages/cli run compile",
+    "test:cli": "npm --prefix packages/cli run test",
     "watch": "npm --prefix packages/vscode-extension run watch",
     "package": "npm run compile && npm --prefix packages/vscode-extension run package",
     "package:platforms": "npm run compile && npm --prefix packages/vscode-extension run package:platforms",
     "build:embeddings": "npm --prefix packages/core run build:embeddings",
     "build:embeddings:all": "npm --prefix packages/core run build:embeddings:all",
-    "check:settings": "npm --prefix packages/vscode-extension run check:settings"
+    "check:settings": "npm --prefix packages/vscode-extension run check:settings",
+    "publish:npm": "node scripts/publish.js",
+    "publish:npm:dry": "node scripts/publish.js --dry-run"
   },
   "license": "Apache-2.0",
   "repository": {

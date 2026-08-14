@@ -141,6 +141,31 @@ const SENSITIVE_KEYWORDS: {
   // `login: deploy_bot` is covered by the structural username-assignment rule,
   // which requires an operator and so cannot match a call.
   { phrase: ["account", "name"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
+  // "the uat service account is svc_corp_uat" — the phrase a human actually
+  // writes about a service account, which ["account","name"] above does not
+  // reach. Found by the CLI redaction suite: the value was caught in
+  // `username: svc_corp_uat` but sailed through the same secret described in
+  // prose two lines later.
+  //
+  // Bare "account" is deliberately not a keyword. The phrase is the safer
+  // unit, and looksLikeUsername is doing real work here besides — it requires
+  // a separator, so "the account is active" and "the account is locked" have
+  // no candidate value to claim.
+  { phrase: ["service", "account"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
+  // Bare "user" — "the user is svc_corp_uat", which leaked in clear when a
+  // typed prompt was first put through guardPrompt. The two-word phrases above
+  // do not reach it, because nobody writes "the user name is" in conversation.
+  //
+  // This is the same shape as the bare "login" keyword that was deliberately
+  // REJECTED, so it needs its own justification. "login" is overwhelmingly a
+  // function name, and its argument list (`def login(self, email, password)`)
+  // sits exactly in the forward window, so the value test was being handed
+  // real identifiers to approve. "user" appears as an identifier too, but what
+  // follows it there is `.`-joined property access or an assignment operator —
+  // `user.name`, `req.body.username`, `user = ...` — and looksLikeUsername
+  // rejects every one of those, either as a TYPE_WORD segment or for having no
+  // bare separator. The false-positive cases in test/username.js cover it.
+  { phrase: ["user"], label: "Username (conversational)", valueTest: looksLikeUsername, forwardOnly: true, window: 3 },
 ];
 
 // NOTE: there used to be a COMMON_WORD_DENYLIST here ("required", "policy",

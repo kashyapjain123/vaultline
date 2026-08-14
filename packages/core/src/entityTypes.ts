@@ -25,13 +25,23 @@ export function entityTypeFor(match: Match): string {
   // Every shape the username rules produce: the structural
   // "username-assignment", and the proximity matcher's generated
   // "proximity-<phrase>" ids (proximity-login, proximity-userid, ...).
+  //
+  // This list has to be extended whenever a username keyword is added, and it
+  // is easy to forget because nothing fails loudly — the value still gets
+  // redacted, just as <<SECRET_1>> instead of <<USERNAME_1>>. Both
+  // "service account" and bare "user" shipped that way briefly. The exact
+  // match on "proximity-user" is deliberate: `includes("user")` would swallow
+  // unrelated future ids, while the generated id for the bare keyword is
+  // always exactly this.
   if (
     id.includes("username") ||
     id.includes("user-name") ||
     id.includes("user-id") ||
     id.includes("userid") ||
     id.includes("login") ||
-    id.includes("account-name")
+    id.includes("account-name") ||
+    id.includes("service-account") ||
+    id === "proximity-user"
   ) {
     return "USERNAME";
   }

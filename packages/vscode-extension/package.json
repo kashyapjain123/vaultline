@@ -6,7 +6,7 @@
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
   },
-  "version": "1.3.2",
+  "version": "1.4.0",
   "publisher": "vaultline",
   "icon": "icon.png",
   "engines": {
@@ -363,6 +363,7 @@
               "mac-address",
               "ipv6-standalone",
               "ipv6-link-local",
+              "internal-hostname",
               "internal-hostname-contextual",
               "port-contextual"
             ]

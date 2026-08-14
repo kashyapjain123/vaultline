@@ -1,20 +1,27 @@
-# Vaultline for VS Code
+# Vaultline
 
-Zero-trust context control for AI coding agents. This repository holds two
-packages: the **detection engine** and the **VS Code host** that embeds it.
+Zero-trust context control for AI coding agents. This repository holds a
+**detection engine** and the two **hosts** that embed it.
 
 The engine — every rule, the pipeline, the tokenizer, the policy decision, the
 embedding routing — is **`@vaultline/core`** (`packages/core`), and it has no
-dependency on VS Code or any other editor. The host
-(`packages/vscode-extension`) is the chat participant, the settings manifest,
-the commands and the packaging. Porting Vaultline to another editor means
-writing that editor's equivalent of the files in
-`packages/vscode-extension/src/`, not forking the engine.
+dependency on VS Code, on Copilot CLI, or on any other editor. The hosts are
+thin adapters over it:
 
-They live together because there is one host today and a `file:` dependency
-between them; the seam is enforced by the code, not by the repository
-boundary. If a second host ever needs the engine on its own, `git subtree
-split --prefix=packages/core` extracts it with its history intact.
+| Package | Host | Ships as |
+|---|---|---|
+| `packages/vscode-extension` | VS Code — the `@vaultline` chat participant | Marketplace `.vsix` |
+| `packages/cli` | GitHub Copilot CLI — replaces its file/shell tools | `@vaultline/cli` on npm |
+
+The second host is the evidence for the split rather than the theory of it: it
+reuses the engine unchanged, and needed only a `VaultlineHost` implementation
+(`packages/cli/src/cliHost.ts`, about a hundred lines on top of the core's own
+`ConsoleHost`) plus the MCP plumbing Copilot speaks.
+
+They live together because of the `file:` dependencies between them; the seam
+is enforced by the code, not by the repository boundary. If a host ever needs
+the engine on its own, `git subtree split --prefix=packages/core` extracts it
+with its history intact.
 
 ## Repository layout
 
@@ -42,6 +49,13 @@ packages/
     package.json             — the extension manifest (commands, settings schema)
     .vscodeignore(.bundled)  — what ships in each build
     THIRD-PARTY-NOTICES.md   — ships inside every .vsix; see Licensing below
+  cli/                       — @vaultline/cli: the GitHub Copilot CLI host
+    src/
+      cli.ts                 — copilot / mcp / reveal / doctor
+      mcpServer.ts           — the redacting tool set Copilot calls into
+      copilotTools.ts        — the built-in tool names it replaces, and why
+      cliHost.ts             — VaultlineHost for a terminal (config + keychain)
+      jsonRpc.ts             — MCP stdio transport, hand-rolled to stay dep-free
 ```
 
 Every file under `vscode-extension/src/` is VS Code-specific, and that is the
@@ -59,14 +73,15 @@ cd vaultline
 npm run setup
 ```
 
-The two packages are installed and built separately and in order — the
-extension type-checks against the `.d.ts` the core emits — so `npm run setup`
-is the entry point rather than a plain `npm install`. From then on:
+The packages are installed and built separately and in order — both hosts
+type-check against the `.d.ts` the core emits — so `npm run setup` is the entry
+point rather than a plain `npm install`. From then on:
 
 ```bash
-npm run compile           # both packages
+npm run compile           # core, then both hosts
 npm run watch             # the extension, in watch mode
 npm run check:settings    # package.json vs. the core's DEFAULT_SETTINGS
+npm run test:cli          # the Copilot CLI host's five suites
 ```
 
 Then press **F5** with the repository root open as the workspace (see
@@ -182,8 +197,46 @@ That means:
 To cover another tool, it would either need to register itself as a
 `vscode.lm` model provider (at which point it shows up in `request.model`
 automatically, no vaultline changes needed), or you'd need a materially
-different, tool-specific interception strategy (proxying its network
-layer, wrapping its CLI, etc.) — outside the current scope.
+different, tool-specific interception strategy.
+
+**GitHub Copilot CLI is now covered by exactly that second route**, in
+`packages/cli` — see below. It is a separate process, so no VS Code extension
+can reach it; the CLI host instead replaces Copilot's own file and shell tools.
+
+## GitHub Copilot CLI
+
+```bash
+npm install -g @vaultline/cli
+vaultline doctor       # what is wired up, and what is not covered
+vaultline copilot      # instead of: copilot
+```
+
+Copilot CLI reads files with its own tools and sends the contents to GitHub.
+Vaultline switches those tools off (`--excluded-tools`) and supplies redacting
+replacements over MCP, so file, search and shell content is tokenised before it
+reaches the model — and rehydrated before the model writes anything back to
+disk. That second direction is not optional: without it, the first edit after a
+redacted read would write `<<PASSWORD_1>>` into the user's config in place of
+their real credential.
+
+Interception happens at the tool boundary rather than the terminal, because the
+terminal is both incomplete (most content never appears there) and unreliable
+(what does appear is masked at the model's discretion, not by any control).
+
+Coverage differs by mode. With `-p` the prompt arrives in our argv and the answer
+returns through our stdout, so both ends are guarded and it matches the extension:
+
+| | `-p` | interactive |
+|---|---|---|
+| Typed prompt | **redacted** | not covered |
+| File / search / shell content | redacted | redacted |
+| Writes back to disk | rehydrated | rehydrated |
+| Answer on screen | **restored** | placeholders (`--reveal` decodes them) |
+
+Interactive typing is not reachable — Copilot draws that prompt and sends it
+itself. Closing it means sitting in front of the model rather than its tools,
+via `COPILOT_PROVIDER_BASE_URL`, which bypasses GitHub's routing and needs your
+own provider key. See `packages/cli/README.md`.
 
 ## Configuration
 
@@ -304,6 +357,13 @@ notifications, progress, clipboard — creates a `VaultlineEngine`, and calls
 `GuardSession` around its own model calls. See the core's README for the
 integration walkthrough and `src/guardSession.ts` for the ordering rules that
 are the reason not to reimplement any of it.
+
+`packages/cli` is a worked example, and a useful one because it is not an
+editor: it implements `VaultlineHost` in ~100 lines by subclassing the core's
+`ConsoleHost`, and calls `guardToolResult`/`guardToolInput` rather than
+`guardPrompt`, since it guards a tool boundary instead of a chat box. Adding it
+required no change to the engine — only the two detection gaps its test suite
+happened to expose, which the VS Code host had equally.
 
 ## Licensing
 

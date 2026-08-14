@@ -1,0 +1,45 @@
+{
+  "name": "@vaultline/cli",
+  "version": "1.4.0",
+  "description": "Zero-trust context control for GitHub Copilot CLI — redacts secrets, PII and infrastructure detail out of file and shell tool results before they reach the model, and rehydrates them before anything is written back to disk.",
+  "author": {
+    "name": "Kashyap Jain",
+    "url": "https://github.com/kashyapjain123"
+  },
+  "license": "Apache-2.0",
+  "bin": {
+    "vaultline": "./out/cli.js"
+  },
+  "main": "./out/cli.js",
+  "files": [
+    "out",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "//dependencies": "The MCP stdio protocol is hand-rolled in jsonRpc.ts rather than pulled from @modelcontextprotocol/sdk. It is newline-delimited JSON-RPC 2.0 and we implement four methods; against that, every dependency here is one more package with read access to the developer's files and shell output, inside the tool whose entire purpose is keeping that content contained. @vaultline/core is the only dependency, matching core's own restraint.",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test:protocol": "npm run compile && node test/mcp-protocol.js",
+    "test:redaction": "npm run compile && node test/redaction.js",
+    "test:rehydrate": "npm run compile && node test/rehydrate.js",
+    "test:reveal": "npm run compile && node test/reveal.js",
+    "test:instructions": "npm run compile && node test/instructions.js",
+    "test:prompt": "npm run compile && node test/prompt-loop.js",
+    "test": "npm run test:protocol && npm run test:redaction && npm run test:rehydrate && npm run test:reveal && npm run test:instructions && npm run test:prompt"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@vaultline/core": "file:../core"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kashyapjain123/vaultline.git",
+    "directory": "packages/cli"
+  }
+}

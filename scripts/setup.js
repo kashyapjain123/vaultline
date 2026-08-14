@@ -48,7 +48,10 @@ run("npm", ["--prefix", "packages/core", "install", "--no-audit", "--no-fund"]);
 console.log("\nInstalling extension dependencies…");
 run("npm", ["--prefix", "packages/vscode-extension", "install", "--no-audit", "--no-fund"]);
 
-console.log("\nCompiling @vaultline/core and the extension…");
+console.log("\nInstalling CLI dependencies…");
+run("npm", ["--prefix", "packages/cli", "install", "--no-audit", "--no-fund"]);
+
+console.log("\nCompiling @vaultline/core, the extension and the CLI…");
 run("npm", ["run", "compile"]);
 
 console.log("\nChecking the settings manifest against the core…");

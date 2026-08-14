@@ -110,6 +110,40 @@ async function main() {
     await expectUntouched("ordinary python", src);
   }
 
+  console.log("\n[conversational forms, and the TYPE they produce]");
+  {
+    // Both of these leaked in clear until 1.4.0 — "the user is X" was found by
+    // putting a typed CLI prompt through guardPrompt for the first time.
+    //
+    // The type assertion is the real point. Adding a keyword without extending
+    // entityTypes.ts still redacts the value, just as <<SECRET_1>> rather than
+    // <<USERNAME_1>>, so nothing fails and the mistake is invisible. Both of
+    // these shipped that way for exactly that reason.
+    for (const [text, secret] of [
+      ["the user is svc_corp_uat", "svc_corp_uat"],
+      ["the uat service account is svc_corp_uat", "svc_corp_uat"],
+      ["the user is john.smith", "john.smith"],
+    ]) {
+      const { redactedText, mappings } = await redact(text);
+      check(`${text} -> redacted`, !redactedText.includes(secret), redactedText);
+      check(`${text} -> typed USERNAME`, mappings.some((m) => m.token.includes("USERNAME")), redactedText);
+    }
+  }
+
+  console.log("\n[bare 'user' must not claim ordinary code]");
+  {
+    // The reason bare "login" was rejected as a keyword. "user" is admissible
+    // only because what follows it in code is property access or an operator,
+    // which looksLikeUsername refuses.
+    await expectUntouched("property access", "user = user.name");
+    await expectUntouched("express body", "const user = req.body.username;");
+    await expectUntouched("member test", "if (user.isAdmin) return;");
+    await expectUntouched("python signature", "def get_user(self, user_id: int)");
+    await expectUntouched("plain prose", "the user clicked the button");
+    await expectUntouched("adjective", "the user is authenticated");
+    await expectUntouched("role word", "this user has admin rights");
+  }
+
   console.log("\n[looksLikeUsername directly]");
   for (const v of ["svc_corp_uat", "kashyap.jain", "svc-prod-01", "deploy_bot"]) {
     check(`accepts ${v}`, looksLikeUsername(v));
