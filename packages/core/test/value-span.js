@@ -29,6 +29,8 @@ const { scan, DEFAULT_RULES } = require(path.join(__dirname, "..", "out", "patte
 const { scanAll } = require(path.join(__dirname, "..", "out", "detectionPipeline"));
 const { tokenize, restore } = require(path.join(__dirname, "..", "out", "tokenizer"));
 const { EntityStore } = require(path.join(__dirname, "..", "out", "entityStore"));
+const { scanProximity } = require(path.join(__dirname, "..", "out", "nlpProximityMatcher"));
+const { looksLikeSecretValue } = require(path.join(__dirname, "..", "out", "proximityUtils"));
 
 let failures = 0;
 function check(label, condition, detail = "") {
@@ -138,7 +140,70 @@ console.log("\n[coverage did not shrink: no secret survives any case]");
   }
 }
 
-envCase().then(() => {
+/**
+ * Quotes must survive the round trip.
+ *
+ * The proximity and semantic matchers took the whole quoted TOKEN as the span
+ * while storing the STRIPPED value, so the two disagreed and restoring dropped
+ * the quotes — handing the developer back `password = hunter2isnotsecure`,
+ * which is not valid syntax. The structural rules had been fixed in 1.2.7; these
+ * two had not, and the proximity span starts one character earlier so it WON the
+ * overlap merge. The buggy span was the one that shipped.
+ */
+async function quoteCases() {
+  console.log("\n[quotes stay in the document, and the round trip is lossless]");
+  const lines = [
+    'password = "hunter2isnotsecure"',
+    "password = 'hunter2isnotsecure'",
+    'my password is "hunter2isnotsecure"',
+    'LLM_KEY="zgfd-xhfj-lfgj-hlfhjf-gh76kd"',
+    'CRED="Hunter@123"',
+    'the api key is "ab12cd34ef56gh78"',
+  ];
+
+  for (const line of lines) {
+    const store = new EntityStore();
+    const { matches } = await scanAll(line, { router: null, semanticMatcher: null });
+    const { redactedText } = tokenize(line, matches, store);
+    const restored = restore(redactedText, store.allMappings());
+
+    // Count quotes rather than pattern-match: the redaction must leave exactly
+    // as many quote characters as the source had, which is precisely what
+    // swallowing them into the span destroyed.
+    const quotes = (t) => (t.match(/["'`]/g) ?? []).length;
+    check(
+      `quote count unchanged: ${line.slice(0, 30)}`,
+      quotes(redactedText) === quotes(line),
+      `${quotes(line)} -> ${quotes(redactedText)} in ${JSON.stringify(redactedText)}`
+    );
+    check(`round trip is byte-identical: ${line.slice(0, 30)}`, restored === line, `got ${JSON.stringify(restored)}`);
+    check(`no quote inside any stored value: ${line.slice(0, 26)}`, store.allMappings().every((m) => !/["'`]/.test(m.originalValue)), JSON.stringify(store.allMappings().map((m) => m.originalValue)));
+  }
+
+  console.log("\n[structural and proximity rules agree on the span]");
+  {
+    // They disagreed, and mergeAndFinalize picks by start position — so the one
+    // that included the quotes won every time.
+    const line = 'password = "hunter2isnotsecure"';
+    const structural = scan(line, DEFAULT_RULES).find((m) => m.ruleId === "generic-password-assignment");
+    const proximity = scanProximity(line).find((m) => m.ruleId === "proximity-password");
+    check("both found it", !!structural && !!proximity);
+    if (structural && proximity) {
+      check("identical spans", structural.start === proximity.start && structural.end === proximity.end,
+        `structural ${structural.start}-${structural.end}, proximity ${proximity.start}-${proximity.end}`);
+    }
+  }
+
+  console.log("\n[looksLikeSecretValue no longer accepts assignments]");
+  for (const v of ['LLM_KEY="zgfd-xhfj-lfgj-hlfhjf-gh76kd"', 'CRED="Hunter@123"', "x+y=12345678", "a=1234567b"]) {
+    check(`rejects ${v.slice(0, 30)}`, !looksLikeSecretValue(v));
+  }
+  for (const v of ["Hunter@123", "Av3Xz21@UAT", "hunter2isnotsecure", "zgfd-xhfj-lfgj-hlfhjf-gh76kd"]) {
+    check(`still accepts ${v}`, looksLikeSecretValue(v));
+  }
+}
+
+envCase().then(quoteCases).then(() => {
   console.log("\n" + "=".repeat(80));
   console.log(failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);

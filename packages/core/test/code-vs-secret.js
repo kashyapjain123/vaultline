@@ -152,6 +152,52 @@ async function main() {
     }
   }
 
+  console.log("\n[SELF-SCAN: this repository's own test files]");
+  {
+    // Suggested during 1.3.0 testing, and it immediately found a bug no
+    // hand-picked line had: `=` counted as a credential symbol, so
+    // `LLM_KEY="zgfd-xhfj-lfgj-hlfhjf-gh76kd"` matched as ONE secret value —
+    // key name and quotes included.
+    //
+    // The property is cheap and general: a redacted VALUE is never an
+    // assignment and never contains a quote. Real mixed code exercises that far
+    // harder than curated examples, which is why this stays a standing check.
+    const fs = require("fs");
+    const dir = __dirname;
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".js"));
+    let offenders = [];
+
+    // A connection string genuinely contains '=' and ';' — "Server=x;Password=y;"
+    // IS the value, and that rule deliberately matches whole. Everything else
+    // should be a bare value.
+    const CONNECTION_STRING_RULES = new Set(["db-connection-string", "sqlserver-connection-string"]);
+    let quoteOffenders = [];
+
+    for (const file of files) {
+      const src = fs.readFileSync(path.join(dir, file), "utf-8");
+      const { matches } = await scanCurrentMessage(src, OPTS);
+      for (const m of matches) {
+        // No redacted value ever contains a quote — that always means the span
+        // ran past the value into the surrounding code.
+        if (/["'`]/.test(m.value)) quoteOffenders.push(`${file}: ${m.ruleId} -> ${JSON.stringify(m.value)}`);
+        if (m.value.includes("=") && !CONNECTION_STRING_RULES.has(m.ruleId)) {
+          offenders.push(`${file}: ${m.ruleId} -> ${JSON.stringify(m.value)}`);
+        }
+      }
+    }
+
+    check(
+      `no match value contains a quote across ${files.length} test files`,
+      quoteOffenders.length === 0,
+      JSON.stringify(quoteOffenders.slice(0, 5))
+    );
+    check(
+      "no match value is an assignment (outside connection strings)",
+      offenders.length === 0,
+      JSON.stringify(offenders.slice(0, 5))
+    );
+  }
+
   console.log("\n" + "=".repeat(80));
   console.log(failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);

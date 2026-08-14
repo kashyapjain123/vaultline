@@ -33,12 +33,63 @@ export type ApiAuthType = "none" | "bearer" | "apiKey" | "basic";
  * while the code only ever spoke the first shape — so pointing at a real
  * OpenAI-compatible service failed with "unexpected response shape".
  */
-export type ApiEmbedFormat = "vaultline" | "openai";
+export type ApiEmbedFormat = "vaultline" | "openai" | "custom";
 
 /** Where each format serves embeddings when the user hasn't overridden the path. */
 export function defaultEmbedPathFor(format: ApiEmbedFormat): string {
   return format === "openai" ? "/v1/embeddings" : "/embed-batch";
 }
+
+/**
+ * Pull an array of vectors out of a response body, given a path.
+ *
+ * Exists so "custom" is a real option rather than a label. The two presets are
+ * just two points in a space every embedding service occupies differently, and
+ * a path expression covers the rest:
+ *
+ *   "embeddings"        { embeddings: [[...], ...] }
+ *   "data[].embedding"  { data: [{ embedding: [...] }, ...] }
+ *   "result.vectors"    { result: { vectors: [[...], ...] } }
+ *
+ * A `[]` suffix means "map over this array and read the remaining path from
+ * each element", which is the shape OpenAI and most of its imitators use.
+ * Returns null when the path leads nowhere, so the caller can report which
+ * setting is wrong instead of failing on a confusing type error later.
+ */
+export function resolveVectorsPath(body: unknown, pathExpr: string): number[][] | null {
+  const segments = pathExpr.split(".").filter((part) => part.length > 0);
+  if (segments.length === 0) return null;
+
+  /** Walk plain (non-array-hop) keys from a starting node. */
+  const walk = (node: unknown, keys: string[]): unknown => {
+    let current = node;
+    for (const key of keys) {
+      if (current === null || typeof current !== "object") return undefined;
+      current = (current as Record<string, unknown>)[key];
+    }
+    return current;
+  };
+
+  const hopAt = segments.findIndex((part) => part.endsWith("[]"));
+  let vectors: unknown;
+
+  if (hopAt === -1) {
+    // Flat: the whole path names one field holding the list of vectors.
+    vectors = walk(body, segments);
+  } else {
+    const before = segments.slice(0, hopAt).concat(segments[hopAt].slice(0, -2));
+    const after = segments.slice(hopAt + 1);
+    const rows = walk(body, before);
+    if (!Array.isArray(rows)) return null;
+    // One vector per element — this is OpenAI's `data[].embedding` shape.
+    vectors = after.length === 0 ? rows : rows.map((row) => walk(row, after));
+  }
+
+  if (!Array.isArray(vectors) || vectors.length === 0) return null;
+  if (!vectors.every((row) => Array.isArray(row) && row.every((n) => typeof n === "number"))) return null;
+  return vectors as number[][];
+}
+
 
 export interface ApiEmbedderOptions {
   baseUrl: string;
@@ -60,6 +111,10 @@ export interface ApiEmbedderOptions {
   format?: ApiEmbedFormat;
   /** Path appended to baseUrl. Empty/omitted uses defaultEmbedPathFor(format). */
   embedPath?: string;
+  /** format "custom" only: field name the input array is sent under. */
+  requestField?: string;
+  /** format "custom" only: where the vectors live in the response — see resolveVectorsPath. */
+  responsePath?: string;
 }
 
 export class ApiEmbedder implements Embedder {
@@ -69,6 +124,8 @@ export class ApiEmbedder implements Embedder {
   private headers: Record<string, string>;
   private format: ApiEmbedFormat;
   private embedPath: string;
+  private requestField: string;
+  private responsePath: string;
   private authType: ApiAuthType;
   private apiKeyHeader?: string;
   private readonly extraHeaders: Record<string, string>;
@@ -80,10 +137,50 @@ export class ApiEmbedder implements Embedder {
     this.model = options.model;
     this.format = options.format ?? "vaultline";
     this.embedPath = normalisePath(options.embedPath) || defaultEmbedPathFor(this.format);
+    this.requestField = options.requestField?.trim() || "texts";
+    this.responsePath = options.responsePath?.trim() || "embeddings";
     this.authType = options.authType ?? "none";
     this.apiKeyHeader = options.apiKeyHeader;
     this.extraHeaders = options.extraHeaders ?? {};
     this.headers = { "Content-Type": "application/json", ...buildAuthHeaders(options), ...this.extraHeaders };
+  }
+
+  /**
+   * The request body for this format.
+   *
+   * The two presets are just fixed points of the same shape the custom option
+   * expresses — "texts"/"embeddings" and "input"/"data[].embedding" — which is
+   * the honest way to show nothing here is OpenAI-specific.
+   */
+  private buildBody(texts: string[]): Record<string, unknown> {
+    if (this.format === "openai") {
+      // OpenAI requires `model` and has no server-side default, so send
+      // something rather than let the request 400 about a field the user never
+      // knew existed.
+      return { input: texts, model: this.model || "text-embedding-3-small" };
+    }
+    if (this.format === "custom") {
+      const body: Record<string, unknown> = { [this.requestField]: texts };
+      if (this.model) body.model = this.model;
+      return body;
+    }
+    return this.model ? { texts, model: this.model } : { texts };
+  }
+
+  /** The vectors in a response, per format. */
+  private readVectors(body: unknown): number[][] | null {
+    if (this.format === "openai") {
+      // Sort by `index` before mapping. The API documents them in order, but
+      // relying on that is a silent-corruption risk: mismatched vectors would
+      // make routing score every message against the wrong text, and nothing
+      // downstream could detect it.
+      const rows = (body as { data?: Array<{ embedding?: number[]; index?: number }> })?.data;
+      if (!Array.isArray(rows)) return null;
+      const sorted = rows.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      const vectors = sorted.map((row) => row.embedding);
+      return vectors.every((v) => Array.isArray(v)) ? (vectors as number[][]) : null;
+    }
+    return resolveVectorsPath(body, this.format === "custom" ? this.responsePath : "embeddings");
   }
 
   /**
@@ -145,16 +242,7 @@ export class ApiEmbedder implements Embedder {
       const res = await fetch(`${this.baseUrl}${this.embedPath}`, {
         method: "POST",
         headers: this.headers,
-        body: JSON.stringify(
-          this.format === "openai"
-            ? // OpenAI requires `model`; there is no server-side default to fall
-              // back on, so send something rather than let the request 400 with
-              // a message about a field the user never knew existed.
-              { input: texts, model: this.model || "text-embedding-3-small" }
-            : this.model
-              ? { texts, model: this.model }
-              : { texts }
-        ),
+        body: JSON.stringify(this.buildBody(texts)),
         signal: controller.signal,
       });
 
@@ -165,27 +253,17 @@ export class ApiEmbedder implements Embedder {
         throw new Error(`Embedding API at ${this.baseUrl} returned HTTP ${res.status}`);
       }
 
-      const body = (await res.json()) as {
-        embeddings?: number[][];
-        data?: Array<{ embedding?: number[]; index?: number }>;
-      };
+      const body = await res.json();
+      const vectors = this.readVectors(body);
 
-      const vectors =
-        this.format === "openai"
-          ? // Sort by `index` before mapping. The API documents them in order,
-            // but relying on that is a silent-corruption risk: mismatched
-            // vectors would make routing score every message against the wrong
-            // text, and nothing downstream could detect it.
-            (body.data ?? [])
-              .slice()
-              .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-              .map((row) => row.embedding as number[])
-          : body.embeddings;
-
-      if (!Array.isArray(vectors) || vectors.length !== texts.length || vectors.some((v) => !Array.isArray(v))) {
+      if (!Array.isArray(vectors) || vectors.length !== texts.length) {
+        const hint =
+          this.format === "custom"
+            ? `check vaultline.embeddingApiResponsePath (currently "${this.responsePath}")`
+            : "check vaultline.embeddingApiFormat";
         throw new Error(
           `Embedding API at ${this.baseUrl}${this.embedPath} returned an unexpected response shape for ` +
-            `format "${this.format}" — check vaultline.embeddingApiFormat.`
+            `format "${this.format}" — ${hint}.`
         );
       }
 

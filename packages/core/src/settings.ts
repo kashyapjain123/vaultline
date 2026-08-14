@@ -21,7 +21,7 @@ import { DEFAULT_CROSS_TURN_TURNS, DEFAULT_SEMANTIC_THRESHOLD } from "./detectio
 export type EmbeddingBackend = "hashing" | "api";
 export type EmbeddingAuthType = "none" | "bearer" | "apiKey" | "basic";
 /** Request/response shape an embedding endpoint speaks. */
-export type EmbeddingApiFormat = "vaultline" | "openai";
+export type EmbeddingApiFormat = "vaultline" | "openai" | "custom";
 
 export interface VaultlineSettings {
   // --- Policy ---
@@ -63,6 +63,10 @@ export interface VaultlineSettings {
   embeddingApiEmbedPath: string;
   /** Path used to check the endpoint is up. EMPTY means don't probe at all — many hosted services have no health route. */
   embeddingApiHealthPath: string;
+  /** format "custom": field name the input array is sent under. */
+  embeddingApiRequestField: string;
+  /** format "custom": where the vectors live in the response, e.g. "data[].embedding". */
+  embeddingApiResponsePath: string;
   /**
    * Whether centroids rebuilt against a CUSTOM embedding endpoint may carry the
    * whole-message business-content BLOCK. Off by default — see
@@ -142,6 +146,8 @@ export const DEFAULT_SETTINGS: VaultlineSettings = {
   // set two settings that must agree.
   embeddingApiEmbedPath: "",
   embeddingApiHealthPath: "/health",
+  embeddingApiRequestField: "texts",
+  embeddingApiResponsePath: "embeddings",
   // Conservative by default, for the same measured reason the hashing fallback
   // keeps routing but gives up the block: an uncalibrated embedder must not be
   // the thing that decides an entire message is confidential. A user who has

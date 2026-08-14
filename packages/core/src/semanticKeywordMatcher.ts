@@ -35,7 +35,7 @@ import * as fs from "fs";
 import { Match, Severity, Category, SEVERITY_RANK } from "./patternMatcher";
 import { Embedder, embedBatchFallback } from "./embeddings/embedder";
 import { cosineSimilarity } from "./embeddings/hashingEmbedder";
-import { tokenize, trimPunct, looksLikeSecretValue, stripValueQuotes, Token } from "./proximityUtils";
+import { tokenize, trimPunct, looksLikeSecretValue, stripValueQuotes, Token, unquotedSpan } from "./proximityUtils";
 
 interface SeedGroup {
   label: string;
@@ -295,16 +295,18 @@ export class SemanticKeywordMatcher {
         if (!looksLikeSecretValue(tokens[j].text)) continue;
 
         const valueTok = tokens[j];
-        const cleanValue = stripValueQuotes(valueTok.text);
+        // Same span rule as nlpProximityMatcher: quotes stay in the document so
+        // the restored answer is still valid syntax.
+        const span = unquotedSpan(valueTok.text, valueTok.start);
 
         matches.push({
           ruleId: `semantic-${best.key}`,
           label: `${best.group.label} (similarity ${best.score.toFixed(2)})`,
           severity: bandedSeverity(best.score, best.group.severity),
           category: best.group.category,
-          value: cleanValue,
-          start: valueTok.start,
-          end: valueTok.end,
+          value: span.value,
+          start: span.start,
+          end: span.end,
         });
         break; // one value per keyword hit is enough
       }

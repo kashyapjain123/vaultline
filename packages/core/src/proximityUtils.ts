@@ -50,6 +50,32 @@ export function stripValueQuotes(s: string): string {
 }
 
 /**
+ * The span of a token's value INSIDE any surrounding quote pair.
+ *
+ * A token that arrives as `"hunter2"` must be redacted as `"<<PASSWORD_1>>"`,
+ * not `<<PASSWORD_1>>`. The matchers were taking the whole token as the span
+ * while storing the STRIPPED value, so the two disagreed and the round trip
+ * silently destroyed the quotes:
+ *
+ *     password = "hunter2isnotsecure"   ->   password = <<PASSWORD_1>>
+ *     ...restored                       ->   password = hunter2isnotsecure
+ *
+ * which is not valid syntax in most languages — the developer's own code came
+ * back broken. The structural rules already got this right in 1.2.7 by keeping
+ * quotes outside their capture group; this is the same rule for the token-based
+ * matchers, shared so the two cannot drift apart again.
+ */
+export function unquotedSpan(token: string, start: number): { start: number; end: number; value: string } {
+  const value = stripValueQuotes(token);
+  // A quote pair was found and removed exactly when the value is two characters
+  // shorter, so the offset is one on each side.
+  const quoted = value.length === token.length - 2;
+  return quoted
+    ? { start: start + 1, end: start + 1 + value.length, value }
+    : { start, end: start + token.length, value };
+}
+
+/**
  * THE single "does this look like a secret VALUE" rule, shared by
  * nlpProximityMatcher.ts and semanticKeywordMatcher.ts.
  *
@@ -73,6 +99,10 @@ export function looksLikeSecretValue(raw: string): boolean {
   const v = stripValueQuotes(raw);
   if (v.length < 8) return false;
   if (/\s/.test(v)) return false; // whitespace => prose, never the body of a secret
+  // A quote INSIDE the value (after the outer pair is stripped) means this is a
+  // fragment of code rather than a value — `LLM_KEY="zgfd-..."` arrives as one
+  // token when the surrounding text is itself quoted, and matched as a whole.
+  if (/['"`]/.test(v)) return false;
 
   // Shape A — generated alphanumeric secret: letters AND digits together.
   if (/^[A-Za-z0-9_-]+$/.test(v) && /[A-Za-z]/.test(v) && /\d/.test(v)) return true;
@@ -112,8 +142,16 @@ export function looksLikeSecretValue(raw: string): boolean {
  * `os.environ.get` and `get_api_Key` are dotted/underscored precisely BECAUSE
  * they are code. Counting either as evidence would readmit every case this
  * exists to reject.
+ *
+ * `=` and `+` were here and are now gone for the same reason, found by scanning
+ * this project's own test files: `=` made
+ * `LLM_KEY="zgfd-xhfj-lfgj-hlfhjf-gh76kd"` qualify as a single secret VALUE, so
+ * the key name and the quotes were swallowed into the redaction. An assignment
+ * operator is evidence of an assignment, not of a credential. Cost: a password
+ * whose only symbol is `+` or `=` — which Shape A already covers whenever it is
+ * otherwise alphanumeric.
  */
-const CREDENTIAL_SYMBOLS = /[@#$%^&*!?+=~]/;
+const CREDENTIAL_SYMBOLS = /[@#$%^&*!?~]/;
 
 /**
  * Is a captured assignment value a literal, or a reference to code?

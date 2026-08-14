@@ -525,6 +525,8 @@ function buildApiEmbedder(settings: VaultlineSettings): ApiEmbedder {
   return new ApiEmbedder({
     format: settings.embeddingApiFormat,
     embedPath: settings.embeddingApiEmbedPath,
+    requestField: settings.embeddingApiRequestField,
+    responsePath: settings.embeddingApiResponsePath,
     baseUrl: settings.embeddingApiUrl,
     timeoutMs: settings.embeddingApiTimeoutMs,
     model: settings.embeddingApiModel.length > 0 ? settings.embeddingApiModel : undefined,

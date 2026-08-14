@@ -21,7 +21,7 @@
 
 const http = require("http");
 const path = require("path");
-const { ApiEmbedder, defaultEmbedPathFor } = require(path.join(__dirname, "..", "out", "embeddings", "apiEmbedder"));
+const { ApiEmbedder, defaultEmbedPathFor, resolveVectorsPath } = require(path.join(__dirname, "..", "out", "embeddings", "apiEmbedder"));
 
 let nextPort = 19300;
 
@@ -36,7 +36,7 @@ function check(label, condition, detail = "") {
 }
 
 /** Records what it was asked for, and answers in the requested shape. */
-function startEndpoint({ format = "vaultline", dim = 8, shuffle = false } = {}) {
+function startEndpoint({ format = "vaultline", dim = 8, shuffle = false, wrap = null } = {}) {
   const port = nextPort++;
   const state = { port, paths: [], bodies: [], headers: [] };
   const server = http.createServer((req, res) => {
@@ -48,10 +48,11 @@ function startEndpoint({ format = "vaultline", dim = 8, shuffle = false } = {}) 
       const parsed = JSON.parse(body || "{}");
       state.bodies.push(parsed);
 
-      // Read whichever field arrived. The mismatch case below deliberately
-      // sends the wrong shape, and the endpoint has to answer in ITS format
-      // regardless so the client is the thing that reports the problem.
-      const texts = parsed.input ?? parsed.texts ?? [];
+      // Read whichever field holds the array — the custom cases send arbitrary
+      // names like "sentences", and the mismatch case deliberately sends the
+      // wrong shape entirely. The endpoint answers in ITS format regardless, so
+      // the client is the thing that reports a mismatch.
+      const texts = Object.values(parsed).find((v) => Array.isArray(v)) ?? [];
       const vector = (i) => Array.from({ length: dim }, (_, k) => i + k / 100);
 
       res.setHeader("Content-Type", "application/json");
@@ -59,6 +60,9 @@ function startEndpoint({ format = "vaultline", dim = 8, shuffle = false } = {}) 
         const rows = texts.map((_, i) => ({ embedding: vector(i), index: i }));
         // Deliberately out of order when asked: the client must sort by index.
         res.end(JSON.stringify({ data: shuffle ? rows.slice().reverse() : rows }));
+      } else if (wrap) {
+        // An arbitrary nesting, for the "custom" path expression.
+        res.end(JSON.stringify(wrap(texts.map((_, i) => vector(i)))));
       } else {
         res.end(JSON.stringify({ embeddings: texts.map((_, i) => vector(i)) }));
       }
@@ -171,6 +175,87 @@ async function main() {
     await embedder.embedBatch(["b"]);
     check("cleared token removes the header", state.headers[1].authorization === undefined, JSON.stringify(state.headers[1].authorization));
     await stop(server);
+  }
+
+  console.log("\n[custom format: the presets are not special-cased]");
+  {
+    // The point of "custom": describing the vaultline preset by hand must
+    // behave identically, which is what shows the two built-ins are just fixed
+    // points of the same mechanism rather than the only shapes supported.
+    const { server, state } = await startEndpoint({ format: "vaultline" });
+    const embedder = new ApiEmbedder({
+      baseUrl: `http://127.0.0.1:${state.port}`,
+      format: "custom",
+      embedPath: "/embed-batch",
+      requestField: "texts",
+      responsePath: "embeddings",
+    });
+    const out = await embedder.embedBatch(["a", "b"]);
+    check("behaves like the vaultline preset", out.length === 2);
+    check("sent the configured field", Array.isArray(state.bodies[0].texts), JSON.stringify(state.bodies[0]));
+    await stop(server);
+  }
+
+  {
+    const { server, state } = await startEndpoint({ format: "openai" });
+    const embedder = new ApiEmbedder({
+      baseUrl: `http://127.0.0.1:${state.port}`,
+      format: "custom",
+      embedPath: "/v1/embeddings",
+      requestField: "input",
+      responsePath: "data[].embedding",
+    });
+    const out = await embedder.embedBatch(["a", "b", "c"]);
+    check("describes the openai shape by hand", out.length === 3);
+    await stop(server);
+  }
+
+  console.log("\n[custom format: arbitrary field names and nesting]");
+  {
+    const { server, state } = await startEndpoint({ wrap: (v) => ({ result: { vectors: v } }) });
+    const embedder = new ApiEmbedder({
+      baseUrl: `http://127.0.0.1:${state.port}`,
+      format: "custom",
+      embedPath: "/input/text",
+      requestField: "sentences",
+      responsePath: "result.vectors",
+    });
+    const out = await embedder.embedBatch(["a", "b"]);
+    check("nested path resolves", out.length === 2);
+    check("custom request field used", Array.isArray(state.bodies[0].sentences), JSON.stringify(state.bodies[0]));
+    check("custom path used", state.paths[0] === "/input/text", state.paths[0]);
+    await stop(server);
+  }
+
+  console.log("\n[a wrong path is reported, naming the setting to fix]");
+  {
+    const { server, state } = await startEndpoint({ format: "vaultline" });
+    const embedder = new ApiEmbedder({
+      baseUrl: `http://127.0.0.1:${state.port}`,
+      format: "custom",
+      responsePath: "nowhere.at.all",
+    });
+    let message = "";
+    try {
+      await embedder.embedBatch(["a"]);
+    } catch (err) {
+      message = String(err);
+    }
+    check("throws rather than returning garbage", message.length > 0);
+    check("names embeddingApiResponsePath", message.includes("embeddingApiResponsePath"), message);
+    await stop(server);
+  }
+
+  console.log("\n[resolveVectorsPath directly]");
+  {
+    check("flat", resolveVectorsPath({ embeddings: [[1, 2]] }, "embeddings")?.length === 1);
+    check("array hop", resolveVectorsPath({ data: [{ embedding: [1] }, { embedding: [2] }] }, "data[].embedding")?.length === 2);
+    check("nested object", resolveVectorsPath({ result: { vectors: [[1]] } }, "result.vectors")?.length === 1);
+    check("bare array hop", resolveVectorsPath({ out: [[1], [2]] }, "out[]")?.length === 2);
+    check("missing path -> null", resolveVectorsPath({ embeddings: [[1]] }, "nope") === null);
+    check("wrong leaf -> null", resolveVectorsPath({ data: [{ x: 1 }] }, "data[].embedding") === null);
+    check("non-numeric -> null", resolveVectorsPath({ embeddings: [["a"]] }, "embeddings") === null);
+    check("empty path -> null", resolveVectorsPath({ embeddings: [[1]] }, "") === null);
   }
 
   console.log("\n" + "=".repeat(80));

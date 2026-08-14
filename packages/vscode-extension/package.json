@@ -6,7 +6,7 @@
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
   },
-  "version": "1.3.0",
+  "version": "1.3.1",
   "publisher": "vaultline",
   "icon": "icon.png",
   "engines": {
@@ -260,10 +260,11 @@
           "type": "string",
           "enum": [
             "vaultline",
-            "openai"
+            "openai",
+            "custom"
           ],
           "default": "vaultline",
-          "description": "Request/response shape your embedding endpoint speaks. 'vaultline' is the bundled server's: POST {texts} -> {embeddings}. 'openai' is what hosted providers implement: POST {input, model} -> {data:[{embedding, index}]}. Leave as 'vaultline' unless embeddingApiUrl points at a third-party service."
+          "description": "Request/response shape your embedding endpoint speaks. 'vaultline' is the bundled server's: POST {texts} -> {embeddings}. 'openai' is what many hosted providers implement: POST {input, model} -> {data:[{embedding, index}]}. 'custom' is for anything else — describe your endpoint with embeddingApiRequestField and embeddingApiResponsePath. Nothing here is OpenAI-specific: both presets are just fixed points of what 'custom' expresses."
         },
         "vaultline.embeddingApiEmbedPath": {
           "type": "string",
@@ -274,6 +275,16 @@
           "type": "string",
           "default": "/health",
           "description": "Path used to check the endpoint is reachable before routing switches to it. Set to an EMPTY string if your endpoint has no health route — most hosted services don't, and probing a route that doesn't exist made Vaultline treat the endpoint as down and silently fall back to the built-in hashing embedder. With probing off, an endpoint that really is unreachable simply fails open at the first call, so detection keeps running."
+        },
+        "vaultline.embeddingApiRequestField": {
+          "type": "string",
+          "default": "texts",
+          "description": "Only used when embeddingApiFormat is 'custom': the field name your endpoint expects the array of input strings under, e.g. 'texts', 'input', 'sentences'."
+        },
+        "vaultline.embeddingApiResponsePath": {
+          "type": "string",
+          "default": "embeddings",
+          "description": "Only used when embeddingApiFormat is 'custom': where the vectors live in the response. Supports nesting and arrays — 'embeddings' for { embeddings: [[...]] }, 'data[].embedding' for { data: [{ embedding: [...] }] }, 'result.vectors' for { result: { vectors: [[...]] } }."
         },
         "vaultline.trustCustomEmbeddingsForBlocking": {
           "type": "boolean",

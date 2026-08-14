@@ -106,7 +106,7 @@ export const DEFAULT_RULES: PatternRule[] = [
     label: "AWS Secret Access Key (assignment)",
     severity: "high",
     category: "SECRET",
-    regex: /\b(?:aws_secret_access_key|secret_access_key)[ \t]*[:=][ \t]*['"]?([A-Za-z0-9/+=]{40})['"]?/gid,
+    regex: /\b(?:aws_secret_access_key|secret_access_key)[ \t]*[:=][ \t]*['"`]?([A-Za-z0-9/+=]{40})['"`]?/gid,
     valueGroup: 1,
   },
   {
@@ -130,7 +130,7 @@ export const DEFAULT_RULES: PatternRule[] = [
     // / "token" are deliberately NOT here (they'd hit TypeScript annotations
     // like `token: string`), and are left to the proximity matcher.
     regex:
-      /["']?\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|access[_-]?key)\b["']?[ \t]*[:=][ \t]*['"]?([A-Za-z0-9_\-]{16,})['"]?/gid,
+      /["'`]?\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|access[_-]?key)\b["'`]?[ \t]*[:=][ \t]*['"`]?([A-Za-z0-9_\-]{16,})['"`]?/gid,
     valueGroup: 1,
   },
   {
@@ -192,7 +192,11 @@ export const DEFAULT_RULES: PatternRule[] = [
     // The value class excludes brackets and parens so a call or subscript ends
     // the match instead of being swallowed whole; valueFilter then rejects what
     // is left when it is a bare identifier rather than a literal.
-    regex: /["']?\b(?:password|passwd|pwd)\b["']?[ \t]*[:=][ \t]*['"]?([^\s'";,}()[\]{}]{6,})['"]?/gid,
+    // Backticks count as quotes on BOTH sides. Markdown and JS template
+    // literals wrap values in them constantly, and without this a value ends up
+    // with a trailing ` glued on — the same over-wide span the URL rule had in
+    // 1.2.8. Found by scanning this repo's own test files.
+    regex: /["'`]?\b(?:password|passwd|pwd)\b["'`]?[ \t]*[:=][ \t]*['"`]?([^\s'"`;,}()[\]{}]{6,})['"`]?/gid,
     valueGroup: 1,
     valueFilter: looksLikeAssignedLiteral,
   },
@@ -210,7 +214,7 @@ export const DEFAULT_RULES: PatternRule[] = [
     // real username too. The type-word denylist inside looksLikeUsername is
     // what keeps `username: string` from matching here.
     regex:
-      /["']?\b(?:user[_-]?name|user[_-]?id|login|account[_-]?name)\b["']?[ \t]*[:=][ \t]*['"]?([A-Za-z][A-Za-z0-9._@-]{2,63})['"]?/gid,
+      /["'`]?\b(?:user[_-]?name|user[_-]?id|login|account[_-]?name)\b["'`]?[ \t]*[:=][ \t]*['"`]?([A-Za-z][A-Za-z0-9._@-]{2,63})['"`]?/gid,
     valueGroup: 1,
     valueFilter: (value) => looksLikeUsername(value),
   },
@@ -227,7 +231,7 @@ export const DEFAULT_RULES: PatternRule[] = [
     // PUBLIC_KEY are common and not secrets, so only the compound forms
     // (API_KEY, ACCESS_KEY, PRIVATE_KEY) count.
     regex:
-      /\b(?:export[ \t]+)?[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CRED|KEY|AUTH)[A-Z0-9_]*[ \t]*=[ \t]*["']?([^\s"'()[\]{}]{8,})["']?/gd,
+      /\b(?:export[ \t]+)?[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CRED|KEY|AUTH)[A-Z0-9_]*[ \t]*=[ \t]*["'`]?([^\s"'`()[\]{}]{8,})["'`]?/gd,
     valueGroup: 1,
     valueFilter: looksLikeAssignedLiteral,
   },
@@ -236,7 +240,13 @@ export const DEFAULT_RULES: PatternRule[] = [
     label: "Database Connection String with Credentials",
     severity: "high",
     category: "SECRET",
-    regex: /\b(?:postgres|postgresql|mysql|mongodb(?:\+srv)?):\/\/[^\s:]+:[^\s@]+@[^\s]+/gi,
+    // The trailing class excludes quotes, backticks and semicolons, which are
+    // never part of a connection URI but always follow one in real code:
+    // `const u = "postgres://...app";` used to match through to `app";`, so the
+    // redaction swallowed the closing quote and the statement terminator. Same
+    // over-wide-span family as the URL rule fixed in 1.2.8 — this one was
+    // missed, and the self-scan over this repo's own tests found it.
+    regex: /\b(?:postgres|postgresql|mysql|mongodb(?:\+srv)?):\/\/[^\s:]+:[^\s@]+@[^\s"'`;,]+/gi,
   },
   {
     id: "sqlserver-connection-string",

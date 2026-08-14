@@ -160,7 +160,7 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 
 ## Configuration
 
-43 settings under `vaultline.*`. The ones most worth knowing:
+45 settings under `vaultline.*`. The ones most worth knowing:
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -174,7 +174,7 @@ Set `embeddingBackend` to `"hashing"` to skip the model server entirely.
 | `embeddingBackend` | `"api"` | `"api"` (local model server, auto-managed) or `"hashing"` (zero-setup, no server) |
 | `embeddingApiUrl` | local | Point at your own embedding service instead of the bundled one. Routing centroids are then **rebuilt against your model automatically**, once, and cached — see below |
 | `trustCustomEmbeddingsForBlocking` | `false` | Whether rebuilt centroids may block a whole message as confidential business content. Off until you've validated your model |
-| `embeddingApiFormat` / `embeddingApiEmbedPath` / `embeddingApiHealthPath` | `"vaultline"` / `""` / `"/health"` | Shape, path and health route of a custom endpoint. Set the health path to `""` if yours has no health route — most hosted services don't |
+| `embeddingApiFormat` / `embeddingApiEmbedPath` / `embeddingApiHealthPath` | `"vaultline"` / `""` / `"/health"` | Shape, path and health route of a custom endpoint. `"custom"` describes any shape via `embeddingApiRequestField` / `embeddingApiResponsePath`. Set the health path to `""` if yours has no health route — most hosted services don't |
 | `persistSessionMappings` | `false` | Write this session's token-to-value table to disk. Off: that file holds every detected secret in plain text |
 | `auditLogIncludeValues` | `false` | Off by default — turning it on makes the audit log itself a plaintext record of every secret caught |
 | `anonymizeMode` | `"placeholder"` | `placeholder` / `hash` (reversible) or `mask` (not) |
@@ -188,7 +188,7 @@ Set `embeddingApiUrl`, and run **Vaultline: Set Embedding API Token** if it need
 a credential — that keeps the token in your OS keychain rather than in
 settings.json.
 
-Two shapes are supported, via `embeddingApiFormat`:
+`embeddingApiFormat` has two presets and an escape hatch:
 
 ```
 "vaultline"  POST {baseUrl}/embed-batch     { "texts": [...] }
@@ -196,7 +196,28 @@ Two shapes are supported, via `embeddingApiFormat`:
 
 "openai"     POST {baseUrl}/v1/embeddings   { "input": [...], "model": "..." }
                                          -> { "data": [{ "embedding": [...], "index": 0 }] }
+
+"custom"     describe your own shape with embeddingApiRequestField and
+             embeddingApiResponsePath
 ```
+
+Nothing here is OpenAI-specific — the presets are just two fixed points of what
+`"custom"` expresses, and either can be written out by hand:
+
+```jsonc
+// the vaultline preset, spelled out
+"embeddingApiFormat": "custom",
+"embeddingApiRequestField": "texts",
+"embeddingApiResponsePath": "embeddings",
+
+// your own service
+"embeddingApiEmbedPath": "/input/text",
+"embeddingApiRequestField": "sentences",
+"embeddingApiResponsePath": "result.vectors",   // nesting and arrays supported
+```
+
+The response path understands nesting and arrays: `embeddings`,
+`data[].embedding`, `result.vectors`.
 
 Override the path with `embeddingApiEmbedPath` if yours differs (`/input/text`,
 say). **If your endpoint has no health route, set `embeddingApiHealthPath` to

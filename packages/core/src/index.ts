@@ -102,7 +102,14 @@ export { AuditLog, mappingsToDetail, matchesToDetail, type AuditEntry, type Audi
 export { EmbeddingRouter, type RouteResult } from "./embeddingRouter";
 export { embedBatchFallback, type Embedder } from "./embeddings/embedder";
 export { EMBEDDING_DIM, HashingEmbedder, averageVectors, cosineSimilarity, embed } from "./embeddings/hashingEmbedder";
-export { ApiEmbedder, type ApiAuthType, type ApiEmbedderOptions } from "./embeddings/apiEmbedder";
+export {
+  ApiEmbedder,
+  defaultEmbedPathFor,
+  resolveVectorsPath,
+  type ApiAuthType,
+  type ApiEmbedFormat,
+  type ApiEmbedderOptions,
+} from "./embeddings/apiEmbedder";
 export { EmbeddingServerManager } from "./embeddings/serverManager";
 
 // --- Syntax awareness ---

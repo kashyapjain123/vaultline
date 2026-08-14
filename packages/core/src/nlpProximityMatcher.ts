@@ -59,7 +59,7 @@
  */
 
 import { Match, Severity } from "./patternMatcher";
-import { looksLikeSecretValue, looksLikeUsername, stripValueQuotes } from "./proximityUtils";
+import { looksLikeSecretValue, looksLikeUsername, stripValueQuotes, unquotedSpan } from "./proximityUtils";
 
 interface Token {
   text: string;
@@ -350,16 +350,19 @@ export function scanProximityWithContext(text: string): ProximityScanResult {
         // token (e.g. "my [SEC-2]"), which would lose useful context for no
         // privacy benefit — the keyword alone reveals nothing sensitive.
         const valueTok = tokens[j];
-        const cleanValue = stripValueQuotes(valueTok.text);
+        // unquotedSpan, not valueTok.start/end: the span has to match the value
+        // being stored, or restoring the answer drops the quotes and hands the
+        // developer back broken syntax. See proximityUtils.unquotedSpan().
+        const span = unquotedSpan(valueTok.text, valueTok.start);
 
         matches.push({
           ruleId: "proximity-" + kw.phrase.join("-"),
           label: kw.label,
           severity: "medium" as Severity,
           category: "SECRET",
-          value: cleanValue,
-          start: valueTok.start,
-          end: valueTok.end,
+          value: span.value,
+          start: span.start,
+          end: span.end,
         });
 
         // One value hit per keyword occurrence is enough; move to next keyword.
