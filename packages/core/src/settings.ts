@@ -201,6 +201,7 @@ export const RULE_IDS = {
     "proximity-pass",
     "proximity-passphrase",
     "proximity-secret",
+    "proximity-cred",
     "proximity-creds",
     "proximity-credential",
     "proximity-credentials",

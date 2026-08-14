@@ -6,7 +6,7 @@
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
   },
-  "version": "1.2.7",
+  "version": "1.2.8",
   "publisher": "vaultline",
   "icon": "icon.png",
   "engines": {
@@ -330,6 +330,7 @@
               "proximity-pass",
               "proximity-passphrase",
               "proximity-secret",
+              "proximity-cred",
               "proximity-creds",
               "proximity-credential",
               "proximity-credentials",

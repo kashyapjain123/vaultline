@@ -1,7 +1,7 @@
 {
   "name": "@vaultline/core",
-  "version": "1.2.7",
-  "description": "Editor-agnostic detection, redaction and policy engine for Vaultline — zero-trust context control for AI coding agents.",
+  "version": "1.2.8",
+  "description": "Editor-agnostic detection, redaction and policy engine for Vaultline \u2014 zero-trust context control for AI coding agents.",
   "author": {
     "name": "Kashyap Jain",
     "url": "https://github.com/kashyapjain123"
@@ -31,6 +31,8 @@
     "test:centroids": "npm run compile && node test/centroid-build.js",
     "test:tools": "npm run compile && node test/tool-selection.js",
     "test:spans": "npm run compile && node test/value-span.js",
+    "test:code": "npm run compile && node test/code-vs-secret.js",
+    "test:urls": "npm run compile && node test/url-spans.js",
     "test:routing": "npm run compile && node test/routingMatrix.js",
     "test:hybrid": "npm run compile && node test/hybrid-matrix.js"
   },

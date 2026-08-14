@@ -28,7 +28,11 @@ const ANY_IP = /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\
 // matched value), which then faithfully round-trips through
 // tokenize/restore as that same corrupted value. Excluding backslash makes
 // the match stop cleanly at the URL's real end in both cases.
-const URL_RE = /\bhttps?:\/\/[^\s"'<>\\]+/g;
+// The backtick in the exclusion set is load-bearing: without it a template
+// literal like `https://${host}/api`; matched straight through the closing
+// backtick and the semicolon, so redacting it replaced working syntax rather
+// than a value.
+const URL_RE = /\bhttps?:\/\/[^\s"'`<>\\]+/g;
 const UNIX_PATH = /(?<![\w])\/(?:[\w.-]+\/)+[\w.-]*/g;
 const WIN_PATH = /\b[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g;
 
@@ -152,22 +156,83 @@ function isLoopbackHost(host: string): boolean {
   return lower.endsWith(".localhost"); // RFC 6761 reserves *.localhost for loopback too
 }
 
+/**
+ * Trailing characters that punctuate the surrounding sentence or code rather
+ * than belong to the value.
+ *
+ * A URL or path regex matches greedily up to whitespace, so it happily absorbs
+ * whatever ends the sentence: `https://host/docs)` from a markdown link,
+ * `https://host.` from prose, `/etc/nginx/nginx.conf.`, `C:\...\app.log,`.
+ * Redacting those replaces the punctuation too, which corrupts the text around
+ * the value it was supposed to protect.
+ *
+ * The closing-bracket rule is the subtle half. A trailing `)` is only noise
+ * when it has no opener INSIDE the value — `…/wiki/Foo_(bar)` is a genuine URL
+ * whose parenthesis is part of the path, and stripping it would produce a
+ * broken link. Counting first is what separates the two.
+ */
+function trimTrailingNoise(value: string): string {
+  const PAIRS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  let end = value.length;
+
+  while (end > 0) {
+    const ch = value[end - 1];
+    if (".,;:!?'\"".includes(ch)) {
+      end--;
+      continue;
+    }
+    const opener = PAIRS[ch];
+    if (opener) {
+      const inner = value.slice(0, end);
+      const opens = inner.split(opener).length - 1;
+      const closes = inner.split(ch).length - 1;
+      if (closes > opens) {
+        end--;
+        continue;
+      }
+    }
+    break;
+  }
+
+  return value.slice(0, end);
+}
+
 function scanUrls(text: string): { matches: Match[]; spans: Array<[number, number]> } {
   const matches: Match[] = [];
   const spans: Array<[number, number]> = [];
   URL_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = URL_RE.exec(text)) !== null) {
+    // ALWAYS claim the full raw span, before any trimming — scanIps and
+    // scanFilePaths consult these to avoid separately re-flagging a URL's host
+    // or path portion, and that suppression must still cover the parts we
+    // decline to redact ourselves.
+    spans.push([m.index, m.index + m[0].length]);
+
+    // Truncate at a template interpolation. Truncate, NOT skip: skipping any
+    // URL containing `${` would silently stop redacting
+    // `https://svc-01.corp.example.internal/${path}` — leaking exactly the
+    // internal hostname this rule exists to catch. Cutting at the `${` keeps
+    // the literal prefix (and its host) and drops the expression.
+    const interpolation = m[0].indexOf("${");
+    const truncated = interpolation === -1 ? m[0] : m[0].slice(0, interpolation);
+    const value = trimTrailingNoise(truncated);
+
+    // Nothing left worth redacting: a bare `https://` is what remains of a URL
+    // built entirely from `${…}` expressions, which contains no hostname at all.
+    // Redacting it would replace code and protect nothing.
+    if (!/^https?:\/\/\S/i.test(value)) continue;
+
     let host = "";
     try {
-      host = new URL(m[0]).hostname;
+      host = new URL(value).hostname;
     } catch {
-      // Malformed URL — still worth flagging at low confidence, skip host analysis.
+      // Malformed URL — still worth flagging at low confidence (unchanged
+      // behaviour), just with no host analysis. The guard above already
+      // established there IS an authority here, so this is a real if unparsable
+      // URL rather than a leftover scheme.
     }
 
-    // Claim the span either way so scanIps/scanFilePaths don't separately
-    // re-flag a loopback URL's host or path portion, but emit no match.
-    spans.push([m.index, m.index + m[0].length]);
     if (host && isLoopbackHost(host)) continue;
 
     const internal = host ? isInternalHost(host) : false;
@@ -176,9 +241,9 @@ function scanUrls(text: string): { matches: Match[]; spans: Array<[number, numbe
       label: internal ? "Internal URL" : "URL",
       severity: internal ? "medium" : "low",
       category: CATEGORY,
-      value: m[0],
+      value,
       start: m.index,
-      end: m.index + m[0].length,
+      end: m.index + value.length,
     });
   }
   return { matches, spans };
@@ -194,19 +259,23 @@ function scanFilePaths(text: string, excludeSpans: Array<[number, number]>): Mat
   UNIX_PATH.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = UNIX_PATH.exec(text)) !== null) {
-    if (m[0].length < 4) continue; // skip trivial single-segment noise
-    if (overlapsAny(m.index, m.index + m[0].length, excludeSpans)) continue; // don't double-count a URL's path portion
+    // Trim BEFORE the checks below, so "/etc/nginx/nginx.conf." is judged (and
+    // redacted) as the path it is rather than the path plus the full stop that
+    // ended the sentence.
+    const value = trimTrailingNoise(m[0]);
+    if (value.length < 4) continue; // skip trivial single-segment noise
+    if (overlapsAny(m.index, m.index + value.length, excludeSpans)) continue; // don't double-count a URL's path portion
     const precededByDot = m.index > 0 && text[m.index - 1] === ".";
-    if (!isRealUnixPath(m[0], precededByDot)) continue; // repo-relative / URL-ish fragment — see isRealUnixPath
-    const isHome = isHomeDirectoryPath(m[0]);
+    if (!isRealUnixPath(value, precededByDot)) continue; // repo-relative / URL-ish fragment — see isRealUnixPath
+    const isHome = isHomeDirectoryPath(value);
     matches.push({
       ruleId: "unix-file-path",
       label: isHome ? "File Path (home directory — exposes account name)" : "File Path",
       severity: "low",
       category: CATEGORY,
-      value: m[0],
+      value,
       start: m.index,
-      end: m.index + m[0].length,
+      end: m.index + value.length,
     });
   }
 
@@ -216,15 +285,17 @@ function scanFilePaths(text: string, excludeSpans: Array<[number, number]>): Mat
   // for a bare-slash Unix path.
   WIN_PATH.lastIndex = 0;
   while ((m = WIN_PATH.exec(text)) !== null) {
-    const isHome = /^[A-Za-z]:\\Users\\[^\\]+/i.test(m[0]);
+    const value = trimTrailingNoise(m[0]);
+    if (value.length === 0) continue;
+    const isHome = /^[A-Za-z]:\\Users\\[^\\]+/i.test(value);
     matches.push({
       ruleId: "windows-file-path",
       label: isHome ? "File Path (home directory — exposes account name)" : "File Path",
       severity: "low",
       category: CATEGORY,
-      value: m[0],
+      value,
       start: m.index,
-      end: m.index + m[0].length,
+      end: m.index + value.length,
     });
   }
 

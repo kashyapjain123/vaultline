@@ -70,6 +70,13 @@ export function registerVaultlineParticipant(
   // history re-redaction possible at all; see GuardSession.
   const session: GuardSession = engine.createSession(entityStorePersistPath);
 
+  // Named so the dropped-tool list has somewhere to go. Without it the chat
+  // notice could say HOW MANY tools were left out but never WHICH, so
+  // `vaultline.toolDenyList` was unusable in practice — you cannot deny what
+  // you cannot name.
+  const toolLog = host.createLogChannel("Vaultline Tools");
+  context.subscriptions.push({ dispose: () => toolLog.dispose() });
+
   const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token) => {
     // --- Conversation history, flattened to plain turns for the core ---
     //
@@ -96,9 +103,20 @@ export function registerVaultlineParticipant(
         priorTurns.push({ role: "assistant", text: responseText });
       }
     }
+    // PROGRESS, throughout this handler. VS Code shows its own indicator only
+    // until a participant starts pushing content, and the redaction banner
+    // below IS content — so from that point on the chat sat completely silent
+    // through history replay, the model call and every tool round, with no sign
+    // anything was happening. Progress parts are transient status lines, so
+    // they say "working" without cluttering the transcript the way markdown
+    // would.
+    if (priorTurns.length > 0) {
+      stream.progress(`Screening ${priorTurns.length} earlier turn(s) before replaying them…`);
+    }
     const history = await session.redactHistory(priorTurns);
 
     // --- Detection on the developer's prompt ---
+    stream.progress("Screening your prompt for secrets…");
     const guarded = await session.guardPrompt(request.prompt);
 
     if (guarded.action === "block") {
@@ -146,10 +164,25 @@ export function registerVaultlineParticipant(
       // Worth saying out loud: the user didn't ask for this, and it changes what
       // the model can do for them. Silently dropping tools would look like the
       // model simply choosing not to use one.
+      //
+      // The NAMES go to the log rather than the chat: 57 tool names is a wall of
+      // text mid-conversation, but without them somewhere `toolDenyList` is
+      // advice the user cannot act on.
+      toolLog.append(
+        `Offered ${tools.length} of ${tools.length + selection.truncated.length} tools (vaultline.maxTools = ${settings.maxTools}).\n` +
+          `Left out ${selection.truncated.length}:\n` +
+          selection.truncated.map((t) => `  ${t.name}`).join("\n") +
+          `\n\nAdd any of these to vaultline.toolDenyList (\`*\` is a wildcard) to free that budget for the tools you do want.\n`
+      );
+      if (selection.denied.length > 0) {
+        toolLog.append(`Excluded ${selection.denied.length} by vaultline.toolDenyList.\n`);
+      }
+
       stream.markdown(
         `ℹ️ *Vaultline offered the model ${tools.length} of ${tools.length + selection.truncated.length} available tools ` +
-          `(provider limit). ${selection.truncated.length} were left out — set \`vaultline.toolDenyList\` to choose which, ` +
-          `or raise \`vaultline.maxTools\` if your model allows more.*\n\n`
+          `(provider limit). ${selection.truncated.length} were left out — see the **Vaultline Tools** output channel for ` +
+          `which ones, then set \`vaultline.toolDenyList\` to choose deliberately, or raise \`vaultline.maxTools\` if your ` +
+          `model allows more.*\n\n`
       );
     }
 
@@ -205,6 +238,10 @@ export function registerVaultlineParticipant(
       let finalText = "";
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        // Usually the longest wait in the whole handler, and previously the
+        // most silent.
+        stream.progress(round === 0 ? "Waiting for the model…" : `Waiting for the model (round ${round + 1})…`);
+
         let chatResponse: vscode.LanguageModelChatResponse;
         try {
           chatResponse = await request.model.sendRequest(messages, { tools }, token);
@@ -251,6 +288,9 @@ export function registerVaultlineParticipant(
 
         const resultParts: vscode.LanguageModelToolResultPart[] = [];
         for (const call of toolCalls) {
+          // Named per call: a slow tool (a wide file search, an MCP round trip)
+          // is otherwise indistinguishable from a hang.
+          stream.progress(`Running ${call.name}…`);
           try {
             // 1. REHYDRATE — the tool must operate on real values.
             const rehydratedInput = session.guardToolInput(call.input);
@@ -318,6 +358,7 @@ export function registerVaultlineParticipant(
       }
 
       // --- Reverse-substitute before the developer ever sees the answer ---
+      stream.progress("Restoring your real values into the answer…");
       const { text: restored, suspiciousTokens } = session.restoreResponse(finalText);
 
       if (suspiciousTokens.length > 0) {

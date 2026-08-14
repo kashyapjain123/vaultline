@@ -19,12 +19,18 @@
  * keeps only the part that is genuinely about VS Code — reading
  * `vscode.lm.tools` and passing the result to sendRequest.
  *
- * ORDER IS PRESERVED, deliberately. `vscode.lm.tools` is not arbitrary — the
- * editor's own built-ins (file read, search, terminal) come first, with
- * extension and MCP tools after, so "keep the first N" keeps the general-purpose
- * tools a request like "review this codebase" actually needs and drops the long
- * tail of niche integrations. Re-sorting by name would scatter that ordering and
- * make which tools survive depend on their spelling.
+ * ORDER IS PRESERVED, and the reasoning is worth stating honestly. Keeping the
+ * registry's own order is strictly better than re-sorting by name, which would
+ * make survival depend on spelling. It is ALSO believed that VS Code lists its
+ * own built-ins (file read, search, terminal) before extension and MCP tools, in
+ * which case "keep the first N" keeps the general-purpose tools a request like
+ * "review this codebase" needs and drops the long tail — but that is an
+ * assumption about an ordering the API does not document or guarantee, not a
+ * verified property.
+ *
+ * Which is why the host logs the dropped names: when the assumption does not
+ * hold for someone's setup, they can see exactly what was lost and reach for
+ * `toolDenyList` instead of being quietly served a worse answer.
  */
 
 /** The minimum this module needs to know about a tool — a structural subset of VS Code's LanguageModelToolInformation. */

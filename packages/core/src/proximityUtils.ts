@@ -83,7 +83,74 @@ export function looksLikeSecretValue(raw: string): boolean {
   // not either (that would swallow "key=value").
   if (/^[A-Za-z0-9+/]+={0,2}$/.test(v) && (v.includes("+") || v.endsWith("="))) return true;
 
+  // Shape C — a human-chosen password with punctuation in it. Shape A's
+  // character class is alphanumerics plus _ and -, so `Hunter@123` and
+  // `Av3Xz21@UAT` failed on the '@' alone and went through unredacted.
+  //
+  // All THREE of letter, digit and symbol are required together, which is what
+  // keeps this narrow: prose has no digits or symbols, `os.environ.get` has no
+  // digit, a version string like `v1.2.3` has no symbol from this set, and an
+  // email only qualifies if it also carries a digit — where the structural
+  // email rule outranks this anyway (it is higher priority in the merge).
+  if (
+    /^\S+$/.test(v) &&
+    /[A-Za-z]/.test(v) &&
+    /\d/.test(v) &&
+    CREDENTIAL_SYMBOLS.test(v)
+  ) {
+    return true;
+  }
+
   return false;
+}
+
+/**
+ * Symbols that make an unquoted token look like a credential rather than an
+ * identifier.
+ *
+ * `.` and `_` are deliberately absent, and that absence is the whole point:
+ * `os.environ.get` and `get_api_Key` are dotted/underscored precisely BECAUSE
+ * they are code. Counting either as evidence would readmit every case this
+ * exists to reject.
+ */
+const CREDENTIAL_SYMBOLS = /[@#$%^&*!?+=~]/;
+
+/**
+ * Is a captured assignment value a literal, or a reference to code?
+ *
+ * The structural rules find a value by anchoring on its key (`password =`,
+ * `API_KEY =`), which tells you something follows the operator but nothing
+ * about WHAT. On real Python that produced a run of false positives — a type
+ * annotation (`password: Optional[str])`), a call (`PWD = os.environ.get(`), a
+ * subscript (`get_api_Key(os.environ[`), and a bare `return` picked up from the
+ * next line. In a security tool that direction of error is the expensive one: a
+ * developer who sees `return` highlighted as a secret stops reading the
+ * highlights altogether.
+ *
+ * Two signals, in order:
+ *
+ *  - **Quoted in the source → accept.** A string literal is a value by
+ *    construction, whatever it contains. This is what keeps `"letmein"` working.
+ *  - **Unquoted → require a digit or a credential symbol.** After
+ *    `password =`, a bare word is far more likely a variable being passed along
+ *    than the secret itself.
+ *
+ * ACCEPTED RECALL LOSS, deliberate and the same trade looksLikeSecretValue()
+ * already makes one function below: an unquoted, digit-free `password = letmein`
+ * is no longer flagged. It is structurally indistinguishable from
+ * `password = default_password`, and guessing wrong on that class is what
+ * produced every false positive above.
+ */
+export function looksLikeAssignedLiteral(value: string, wholeMatch: string): boolean {
+  if (value.length === 0) return false;
+
+  // Quoted in the ORIGINAL text, not in the captured group — 1.2.7 deliberately
+  // leaves the quotes outside the value span so the redacted line stays
+  // syntactically valid, which means the evidence lives in the whole match.
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`['"\`]${escaped}['"\`]`).test(wholeMatch)) return true;
+
+  return /\d/.test(value) || CREDENTIAL_SYMBOLS.test(value);
 }
 
 /** Strips leading/trailing punctuation that isn't part of the actual value. */

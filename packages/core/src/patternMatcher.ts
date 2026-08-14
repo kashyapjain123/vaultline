@@ -23,6 +23,12 @@ export const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high
  * file paths) that aren't personal data but still shouldn't leave the
  * machine.
  */
+// proximityUtils imports nothing, so this direction introduces no cycle. The
+// "is this a literal or is it code" judgement lives there beside
+// looksLikeSecretValue(), so every layer that has to answer a question about a
+// candidate value gets one shared answer rather than a private copy.
+import { looksLikeAssignedLiteral } from "./proximityUtils";
+
 export type Category = "SECRET" | "PII" | "INFRA" | "BUSINESS";
 
 export interface PatternRule {
@@ -52,6 +58,24 @@ export interface PatternRule {
    * for connection strings, where the host is as sensitive as the password.
    */
   valueGroup?: number;
+
+  /**
+   * Last word on whether a captured value is really a value. The match is
+   * discarded entirely when this returns false.
+   *
+   * A regex can say "something follows `password =`" but not "that something is
+   * a literal rather than an expression", and the difference is what made
+   * `password: Optional[str])`, `PWD = os.environ.get(` and a bare `return` on
+   * the following line all register as secrets. Character classes alone could
+   * not express it: after excluding brackets, `Optional` and `return` are still
+   * perfectly good 6+ character words.
+   *
+   * A predicate here rather than an ever-more-baroque regex keeps the rule
+   * readable, makes the judgement unit-testable on its own, and applies
+   * everywhere scan() is used — including the editor highlighting path, which
+   * is where these were being seen.
+   */
+  valueFilter?: (value: string, wholeMatch: string) => boolean;
 }
 
 export interface Match {
@@ -82,7 +106,7 @@ export const DEFAULT_RULES: PatternRule[] = [
     label: "AWS Secret Access Key (assignment)",
     severity: "high",
     category: "SECRET",
-    regex: /\b(?:aws_secret_access_key|secret_access_key)\s*[:=]\s*['"]?([A-Za-z0-9/+=]{40})['"]?/gid,
+    regex: /\b(?:aws_secret_access_key|secret_access_key)[ \t]*[:=][ \t]*['"]?([A-Za-z0-9/+=]{40})['"]?/gid,
     valueGroup: 1,
   },
   {
@@ -106,7 +130,7 @@ export const DEFAULT_RULES: PatternRule[] = [
     // / "token" are deliberately NOT here (they'd hit TypeScript annotations
     // like `token: string`), and are left to the proximity matcher.
     regex:
-      /["']?\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|access[_-]?key)\b["']?\s*[:=]\s*['"]?([A-Za-z0-9_\-]{16,})['"]?/gid,
+      /["']?\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|access[_-]?key)\b["']?[ \t]*[:=][ \t]*['"]?([A-Za-z0-9_\-]{16,})['"]?/gid,
     valueGroup: 1,
   },
   {
@@ -160,8 +184,17 @@ export const DEFAULT_RULES: PatternRule[] = [
     category: "SECRET",
     // `["']?` around the key name handles the quoted JSON form — see the
     // generic-api-key comment above for why that was a blind spot.
-    regex: /["']?\b(?:password|passwd|pwd)\b["']?\s*[:=]\s*['"]?([^\s'";,}]{6,})['"]?/gid,
+    // `[ \t]*` around the operator, NOT `\s*`: `\s` includes the line break, so
+    // `if not email or not password:` at the end of a line let the match run on
+    // and claim `return` from the statement below it. A value lives on its key's
+    // own line.
+    //
+    // The value class excludes brackets and parens so a call or subscript ends
+    // the match instead of being swallowed whole; valueFilter then rejects what
+    // is left when it is a bare identifier rather than a literal.
+    regex: /["']?\b(?:password|passwd|pwd)\b["']?[ \t]*[:=][ \t]*['"]?([^\s'";,}()[\]{}]{6,})['"]?/gid,
     valueGroup: 1,
+    valueFilter: looksLikeAssignedLiteral,
   },
   {
     id: "env-var-secret",
@@ -176,8 +209,9 @@ export const DEFAULT_RULES: PatternRule[] = [
     // PUBLIC_KEY are common and not secrets, so only the compound forms
     // (API_KEY, ACCESS_KEY, PRIVATE_KEY) count.
     regex:
-      /\b(?:export\s+)?[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|AUTH)[A-Z0-9_]*\s*=\s*["']?([^\s"']{8,})["']?/gd,
+      /\b(?:export[ \t]+)?[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CRED|KEY|AUTH)[A-Z0-9_]*[ \t]*=[ \t]*["']?([^\s"'()[\]{}]{8,})["']?/gd,
     valueGroup: 1,
+    valueFilter: looksLikeAssignedLiteral,
   },
   {
     id: "db-connection-string",
@@ -229,6 +263,13 @@ export function scan(text: string, rules: PatternRule[] = DEFAULT_RULES): Match[
       // leaks the secret.
       const span = rule.valueGroup !== undefined ? result.indices?.[rule.valueGroup] : undefined;
       const value = span ? result[rule.valueGroup!] : result[0];
+
+      if (rule.valueFilter && !rule.valueFilter(value, result[0])) {
+        // Guard the same zero-length case the push path guards, since we skip
+        // past it without advancing lastIndex ourselves.
+        if (result[0].length === 0) rule.regex.lastIndex++;
+        continue;
+      }
 
       matches.push({
         ruleId: rule.id,

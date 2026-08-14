@@ -82,6 +82,7 @@ const SENSITIVE_KEYWORDS: { phrase: string[]; label: string }[] = [
   { phrase: ["pass"], label: "Password (conversational)" },
   { phrase: ["passphrase"], label: "Passphrase (conversational)" },
   { phrase: ["secret"], label: "Secret (conversational)" },
+  { phrase: ["cred"], label: "Credential (conversational)" },
   { phrase: ["creds"], label: "Credential (conversational)" },
   { phrase: ["credential"], label: "Credential (conversational)" },
   { phrase: ["credentials"], label: "Credential (conversational)" },
@@ -196,8 +197,24 @@ function levenshteinWithinBound(a: string, b: string, bound: number): number {
 }
 
 /** Exact match, exact plural, or — for keywords long enough to make it meaningful — a small-edit-distance fuzzy match tolerating typos. */
-function wordMatchesKeyword(tokenLower: string, keyword: string): boolean {
+function wordMatchesKeyword(rawTokenLower: string, keyword: string): boolean {
+  // The tokenizer keeps a quoted span's quotes, so a dict/kwargs key arrives as
+  // `"opensearch_password"` — quotes included. Strip them before matching, or
+  // the compound split below yields `password"` and matches nothing.
+  const tokenLower = stripValueQuotes(rawTokenLower);
   if (tokenLower === keyword) return true;
+
+  // Compound identifiers. The tokenizer keeps `_` inside a token, so
+  // OPENSEARCH_PASSWORD arrives as ONE opaque token that equals no keyword —
+  // which is why `os.environ.get("OPENSEARCH_PASSWORD", "Av3Xz21@UAT")` had
+  // nothing to anchor on and the password went through. Testing the
+  // underscore-separated parts costs nothing and is how these are named in
+  // practice.
+  //
+  // EXACT on the parts only, never fuzzy: a fragment like "pass" or "key" is
+  // short enough that an edit-distance budget would start reaching ordinary
+  // words, which is the whole reason FUZZY_MIN_KEYWORD_LENGTH is 8.
+  if (tokenLower.includes("_") && tokenLower.split("_").some((part) => part === keyword)) return true;
 
   // Plurals handled EXACTLY, not fuzzily ("secrets", "tokens", "keys",
   // "passwords"). Relying on the edit-distance budget for these is what

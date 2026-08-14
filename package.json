@@ -1,7 +1,7 @@
 {
   "name": "vaultline-workspace",
   "private": true,
-  "version": "1.2.7",
+  "version": "1.2.8",
   "description": "Repository root for Vaultline: the editor-agnostic detection engine (@vaultline/core, packages/core) and the VS Code host that embeds it (packages/vscode-extension). The engine has no editor dependency and can be extracted with `git subtree split --prefix=packages/core` if a second host ever needs it.",
   "author": {
     "name": "Kashyap Jain",
